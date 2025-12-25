@@ -57,6 +57,10 @@ class HandleStore(BaseArrayStore):
 
     def get(self, id: int) -> Any:
         """Get value by handle ID."""
+        # Handle None or invalid types
+        if id is None:
+            return None
+
         # Check if it's a reference (high bit set)
         if id < 0 or id > 0x7FFFFFFF:
             ref_id = id & 0x7FFFFFFF

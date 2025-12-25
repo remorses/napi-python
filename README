@@ -48,7 +48,7 @@ Working features:
 See IMPLEMENTATION_PLAN.md for full details.
 
 ### Priority 1 - Bug Fixes
-- [ ] Fix string argument truncation
+- [x] Fix string argument truncation
 
 ### Priority 2 - Error Handling
 - [ ] napi_throw, napi_throw_error, napi_throw_type_error

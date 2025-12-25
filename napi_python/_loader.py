@@ -101,7 +101,7 @@ FuncGetValueUint32 = CFUNCTYPE(c_int, c_void_p, c_void_p, POINTER(c_uint32))
 FuncGetValueInt64 = CFUNCTYPE(c_int, c_void_p, c_void_p, POINTER(c_int64))
 FuncGetValueDouble = CFUNCTYPE(c_int, c_void_p, c_void_p, POINTER(c_double))
 FuncGetValueStringUtf8 = CFUNCTYPE(
-    c_int, c_void_p, c_void_p, c_char_p, c_size_t, POINTER(c_size_t)
+    c_int, c_void_p, c_void_p, c_void_p, c_size_t, POINTER(c_size_t)
 )
 FuncTypeof = CFUNCTYPE(c_int, c_void_p, c_void_p, POINTER(c_int))
 FuncIsArray = CFUNCTYPE(c_int, c_void_p, c_void_p, POINTER(c_bool))
@@ -431,12 +431,24 @@ def _create_function_table() -> NapiPythonFunctions:
         if not isinstance(py_val, str):
             return napi_status.napi_string_expected
         encoded = py_val.encode("utf-8")
-        if result:
+
+        if not buf:
+            # No buffer - just return the length
+            if not result:
+                return napi_status.napi_invalid_arg
             result[0] = len(encoded)
-        if buf and bufsize > 0:
+        elif bufsize != 0:
+            # Copy string to buffer
             copy_len = min(len(encoded), bufsize - 1)
-            ctypes.memmove(buf, encoded, copy_len)
-            buf[copy_len] = 0
+            if copy_len > 0:
+                ctypes.memmove(buf, encoded, copy_len)
+            # Null terminate
+            ctypes.memset(buf + copy_len, 0, 1)
+            if result:
+                result[0] = copy_len
+        elif result:
+            result[0] = 0
+
         return napi_status.napi_ok
 
     @FuncTypeof

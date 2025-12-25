@@ -27,8 +27,18 @@ result = addon.getMagicNumber()
 print(f"getMagicNumber() = {result}")
 assert result == 42, f"Expected 42, got {result}"
 
-# Note: greet has string truncation issue
-print(f"greet('World') = {addon.greet('World')} (known issue: string truncation)")
+result = addon.greet("World")
+print(f"greet('World') = {result}")
+assert result == "Hello, World!", f"Expected 'Hello, World!', got {result}"
+
+result = addon.greet("Python")
+print(f"greet('Python') = {result}")
+assert result == "Hello, Python!", f"Expected 'Hello, Python!', got {result}"
+
+# Test unicode strings
+result = addon.greet("日本語")
+print(f"greet('日本語') = {result}")
+assert result == "Hello, 日本語!", f"Expected 'Hello, 日本語!', got {result}"
 
 # Test arrays
 print("\n=== Arrays ===")
@@ -91,6 +101,7 @@ assert counter.value == 0, f"Expected 0, got {counter.value}"
 print("\n=== Summary ===")
 print("Working:")
 print("  - Simple functions (add, getMagicNumber)")
+print("  - String functions (greet with ASCII and Unicode)")
 print("  - Arrays (doubleArray, arrayLength)")
 print("  - Callbacks (callWithValue, mapAndSum)")
 print("  - Optional values (maybeDouble, greetOptional)")
@@ -98,7 +109,6 @@ print("  - Division")
 print("  - Classes (Counter with methods and properties)")
 print("")
 print("Known issues:")
-print("  - String arguments get truncated in some cases")
 print("  - Error throwing not yet implemented")
 
 print("\n=== Core tests passed! ===")

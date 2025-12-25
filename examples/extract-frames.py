@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Demux MP4 video using napi-python with @napi-rs/webcodecs."""
+"""
+Demux MP4 video using napi-python with @napi-rs/webcodecs.
+
+This demonstrates successful loading of a native Node addon and 
+demuxing video packets via threadsafe function callbacks.
+"""
 
 import sys
 import os
@@ -9,15 +14,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from napi_python import load_addon
 
-INPUT_VIDEO = os.path.join(os.path.dirname(__file__), "example.mp4")
-ADDON_PATH = os.path.join(
+INPUT = os.path.join(os.path.dirname(__file__), "example.mp4")
+ADDON = os.path.join(
     os.path.dirname(os.path.dirname(__file__)),
     "node_modules/@napi-rs/webcodecs-darwin-arm64/webcodecs.darwin-arm64.node"
 )
 
 
 async def main():
-    webcodecs = load_addon(ADDON_PATH)
+    webcodecs = load_addon(ADDON)
 
     video_chunks = []
     audio_chunks = []
@@ -28,11 +33,11 @@ async def main():
         "error": lambda e: print(f"Error: {e}"),
     })
 
-    await demuxer.load(INPUT_VIDEO)
+    await demuxer.load(INPUT)
 
     duration = demuxer.duration / 1_000_000
     tracks = demuxer.tracks
-    video_track = next((t for t in tracks if "codedWidth" in t), None)
+    video = next((t for t in tracks if "codedWidth" in t), None)
 
     demuxer.demux()
     while demuxer.state == "demuxing":
@@ -40,10 +45,10 @@ async def main():
 
     demuxer.close()
 
-    print(f"Video: {INPUT_VIDEO}")
+    print(f"File: {os.path.basename(INPUT)}")
     print(f"Duration: {duration:.2f}s")
-    if video_track:
-        print(f"Resolution: {video_track['codedWidth']}x{video_track['codedHeight']}")
+    if video:
+        print(f"Resolution: {video['codedWidth']}x{video['codedHeight']}")
     print(f"Demuxed: {len(video_chunks)} video, {len(audio_chunks)} audio chunks")
 
 

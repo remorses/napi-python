@@ -1,5 +1,21 @@
 # original repo https://github.com/Brooooooklyn/webcodecs-node
-"""Video transcoding example using @napi-rs/webcodecs."""
+"""
+Webcodecs demuxing example using @napi-rs/webcodecs.
+
+This example demonstrates what currently works with napi-python:
+- Loading MP4 files
+- Getting track info, duration, decoder configs
+- Demuxing video and audio packets via TSFN callbacks
+
+Current limitations:
+- Demuxed chunks are External pointers (not full EncodedVideoChunk objects)
+- VideoEncoder/AudioEncoder don't work yet (configure doesn't apply)
+- Muxing to new files isn't possible without proper chunk objects
+
+The TSFN (ThreadSafe Function) callbacks work, but the native code doesn't
+call back into NAPI to create proper JavaScript objects. This is because
+the addon detects it's not running in a real Node.js/V8 environment.
+"""
 
 import sys
 import asyncio
@@ -30,22 +46,20 @@ print(f"Webcodecs loaded: {len(dir(webcodecs))} exports")
 
 # Input file
 input_file = Path(__file__).parent / "example.mp4"
-output_file = Path(__file__).parent / "output.mp4"
 
 print(f"\nInput: {input_file}")
-print(f"Output: {output_file}")
 
 if not input_file.exists():
     print("Input file not found!")
     sys.exit(1)
 
 
-async def transcode():
-    # Collect video chunks and frames
+async def demux_example():
+    """Demonstrate MP4 demuxing capabilities."""
+    
+    # Counters for received chunks
     video_chunks = []
     audio_chunks = []
-    frames = []
-    encoded_chunks = []
     errors = []
 
     def on_video_chunk(chunk):
@@ -56,80 +70,71 @@ async def transcode():
 
     def on_error(e):
         errors.append(str(e))
-        print(f"  [error] {e}")
 
     print("\n=== Creating Mp4Demuxer ===")
-    demuxer = webcodecs.Mp4Demuxer(
-        {
-            "videoOutput": on_video_chunk,
-            "audioOutput": on_audio_chunk,
-            "error": on_error,
-        }
-    )
-    print(f"Demuxer created: {demuxer}")
+    demuxer = webcodecs.Mp4Demuxer({
+        "videoOutput": on_video_chunk,
+        "audioOutput": on_audio_chunk,
+        "error": on_error,
+    })
+    print(f"Demuxer created, state: {demuxer.state}")
 
     print("\n=== Loading video file ===")
-    result = demuxer.load(str(input_file))
-    print(f"Load result type: {type(result)}")
-
-    if asyncio.isfuture(result) or asyncio.iscoroutine(result):
-        print("Awaiting load...")
-        result = await result
-        print(f"Load completed: {result}")
-
+    await demuxer.load(str(input_file))
     print(f"State after load: {demuxer.state}")
 
-    print("\n=== Getting decoder config ===")
-    config = demuxer.videoDecoderConfig
-    print(f"Video decoder config: {config}")
-
-    audio_config = demuxer.audioDecoderConfig
-    print(f"Audio decoder config: {audio_config}")
-
-    # Get track info
-    print("\n=== Track info ===")
+    print("\n=== File Information ===")
+    duration_us = demuxer.duration
+    duration_s = duration_us / 1_000_000 if duration_us else 0
+    print(f"Duration: {duration_us} µs ({duration_s:.2f}s)")
+    
     tracks = demuxer.tracks
-    print(f"Tracks: {tracks}")
+    print(f"Tracks: {len(tracks)}")
+    for i, track in enumerate(tracks):
+        track_type = track.get('trackType', 'unknown')
+        if 'codedWidth' in track:
+            print(f"  Track {i}: {track_type} - {track['codedWidth']}x{track['codedHeight']}")
+        elif 'sampleRate' in track:
+            print(f"  Track {i}: {track_type} - {track['sampleRate']}Hz, {track['numberOfChannels']}ch")
 
-    duration = demuxer.duration
-    print(f"Duration: {duration} microseconds ({duration / 1000000:.2f}s)")
+    print("\n=== Decoder Configurations ===")
+    video_config = demuxer.videoDecoderConfig
+    if video_config:
+        print(f"Video: {video_config}")
+    
+    audio_config = demuxer.audioDecoderConfig
+    if audio_config:
+        print(f"Audio: {audio_config}")
 
     print("\n=== Demuxing all packets ===")
-    # Call demux() to extract all packets
-    # demux() spawns a thread and returns immediately
-    # Callbacks are invoked asynchronously
-    print("Calling demux()...")
+    print("Starting demux...")
     demuxer.demux()
-
+    
     # Wait for demuxing to complete
-    print("Waiting for demux to complete...")
     while demuxer.state == "demuxing":
         await asyncio.sleep(0.1)
-
+    
     print(f"Final state: {demuxer.state}")
+
+    print("\n=== Results ===")
     print(f"Video chunks received: {len(video_chunks)}")
     print(f"Audio chunks received: {len(audio_chunks)}")
+    print(f"Total chunks: {len(video_chunks) + len(audio_chunks)}")
+    
     if errors:
-        print(f"Errors encountered: {len(errors)}")
-
-    # Note: The chunks are External objects containing native pointers
-    # In a full implementation, you would need to decode these using VideoDecoder/AudioDecoder
-    # For now, we just count them to verify the demuxing works
-
+        print(f"Errors: {len(errors)}")
+        for e in errors[:3]:  # Show first 3
+            print(f"  - {e}")
+    
+    # Show chunk info (they are External pointers, not full chunk objects)
     if video_chunks:
-        print(f"\nFirst video chunk: {video_chunks[0]}")
-        print(f"Last video chunk: {video_chunks[-1]}")
+        print(f"\nNote: Chunks are {type(video_chunks[0]).__name__} objects (native pointers)")
+        print("Full EncodedVideoChunk/EncodedAudioChunk objects require")
+        print("native NAPI callback support which isn't available outside Node.js")
 
-    if audio_chunks:
-        print(f"\nFirst audio chunk: {audio_chunks[0]}")
-        print(f"Last audio chunk: {audio_chunks[-1]}")
-
-    print("\n=== Summary ===")
-    print(f"Video chunks: {len(video_chunks)}")
-    print(f"Audio chunks: {len(audio_chunks)}")
-    print(f"Frames decoded: {len(frames)}")
-    print(f"Encoded chunks: {len(encoded_chunks)}")
+    demuxer.close()
+    print("\nDemuxer closed.")
 
 
 if __name__ == "__main__":
-    asyncio.run(transcode())
+    asyncio.run(demux_example())

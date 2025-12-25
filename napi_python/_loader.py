@@ -518,25 +518,53 @@ def _create_function_table() -> NapiPythonFunctions:
     @FuncGetValueInt32
     def get_value_int32(env, value, result):
         py_val = ctx.python_value_from_napi(value)
-        result[0] = int(py_val) & 0xFFFFFFFF
+        if py_val is None:
+            result[0] = 0
+            return napi_status.napi_number_expected
+        try:
+            result[0] = int(py_val) & 0xFFFFFFFF
+        except (TypeError, ValueError):
+            result[0] = 0
+            return napi_status.napi_number_expected
         return napi_status.napi_ok
 
     @FuncGetValueUint32
     def get_value_uint32(env, value, result):
         py_val = ctx.python_value_from_napi(value)
-        result[0] = int(py_val) & 0xFFFFFFFF
+        if py_val is None:
+            result[0] = 0
+            return napi_status.napi_number_expected
+        try:
+            result[0] = int(py_val) & 0xFFFFFFFF
+        except (TypeError, ValueError):
+            result[0] = 0
+            return napi_status.napi_number_expected
         return napi_status.napi_ok
 
     @FuncGetValueInt64
     def get_value_int64(env, value, result):
         py_val = ctx.python_value_from_napi(value)
-        result[0] = int(py_val)
+        if py_val is None:
+            result[0] = 0
+            return napi_status.napi_number_expected
+        try:
+            result[0] = int(py_val)
+        except (TypeError, ValueError):
+            result[0] = 0
+            return napi_status.napi_number_expected
         return napi_status.napi_ok
 
     @FuncGetValueDouble
     def get_value_double(env, value, result):
         py_val = ctx.python_value_from_napi(value)
-        result[0] = float(py_val)
+        if py_val is None:
+            result[0] = 0.0
+            return napi_status.napi_number_expected
+        try:
+            result[0] = float(py_val)
+        except (TypeError, ValueError):
+            result[0] = 0.0
+            return napi_status.napi_number_expected
         return napi_status.napi_ok
 
     @FuncGetValueStringUtf8

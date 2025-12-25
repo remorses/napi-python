@@ -852,7 +852,7 @@ def _create_function_table() -> NapiPythonFunctions:
             else:
                 # Regular Python function call
                 ret = py_func(*args)
-            
+
             if result:
                 result[0] = ctx.add_value(ret)
         except Exception as e:
@@ -884,14 +884,14 @@ def _create_function_table() -> NapiPythonFunctions:
         env_obj = get_env(env_id)
         if not env_obj:
             return napi_status.napi_invalid_arg
-        
+
         py_value = ctx.python_value_from_napi(value)
-        
+
         # Create a proper Reference object
         ref = Reference.create(
             ctx, env_obj, py_value, initial_refcount, ReferenceOwnership.kUserland
         )
-        
+
         if result:
             result[0] = ref.id
         return napi_status.napi_ok
@@ -925,7 +925,7 @@ def _create_function_table() -> NapiPythonFunctions:
         ref = ctx.get_ref(ref_id)
         if not ref:
             return napi_status.napi_invalid_arg
-        
+
         new_count = ref.ref()
         if result:
             result[0] = new_count
@@ -937,7 +937,7 @@ def _create_function_table() -> NapiPythonFunctions:
         ref = ctx.get_ref(ref_id)
         if not ref:
             return napi_status.napi_invalid_arg
-        
+
         new_count = ref.unref()
         if result:
             result[0] = new_count
@@ -959,13 +959,13 @@ def _create_function_table() -> NapiPythonFunctions:
             if result:
                 result[0] = Constant.UNDEFINED
             return napi_status.napi_invalid_arg
-        
+
         # msg is required
         if not msg_handle:
             if result:
                 result[0] = Constant.UNDEFINED
             return napi_status.napi_invalid_arg
-        
+
         try:
             # Get the message string
             msg_value = ctx.python_value_from_napi(msg_handle)
@@ -973,16 +973,16 @@ def _create_function_table() -> NapiPythonFunctions:
                 if result:
                     result[0] = Constant.UNDEFINED
                 return napi_status.napi_string_expected
-            
+
             # Create the error
             error = Exception(msg_value)
-            
+
             # Add code attribute if provided
             if code_handle and code_handle != 0:
                 code_value = ctx.python_value_from_napi(code_handle)
                 if isinstance(code_value, str):
                     error.code = code_value
-            
+
             # Store and return the error
             if result:
                 result[0] = ctx.add_value(error)
@@ -1570,7 +1570,7 @@ def _create_function_table() -> NapiPythonFunctions:
         tsfn_data = _tsfn_store.get(tsfn_id)
         if not tsfn_data:
             return napi_status.napi_invalid_arg
-        
+
         # Check closing state
         if tsfn_data.get("is_closing", False) or tsfn_data["closed"]:
             if tsfn_data["thread_count"] == 0:
@@ -1598,7 +1598,7 @@ def _create_function_table() -> NapiPythonFunctions:
                     # Get the function from our persistent reference
                     func_value = tsfn_data.get("func_value")
                     func_ref = tsfn_data.get("func_ref")
-                    
+
                     if func_value is not None and func_ref is not None:
                         # Store the callback in the handle store at a high index
                         # that won't get erased by scope management
@@ -1610,20 +1610,23 @@ def _create_function_table() -> NapiPythonFunctions:
                         js_callback = ctx.add_value(func_value)
                     else:
                         js_callback = 0
-                    
+
                     # Track if native callback triggers any NAPI value creation
                     initial_value_count = len(ctx._handle_store._values)
-                    
+
                     # Call the native JS callback: (env, js_callback, context, data)
                     try:
                         call_js_cb(env_id, js_callback, context, data)
-                    except Exception:
-                        pass  # Native callback may fail, continue with workaround
-                    
+                    except Exception as exc:
+                        import traceback
+                        print(f"[napi-python] call_js_cb exception in TSFN dispatch: {exc}")
+                        traceback.print_exc()
+                        # Native callback may fail, continue with workaround
+
                     # Check if native callback created any new values
                     new_value_count = len(ctx._handle_store._values)
                     native_created_value = new_value_count > initial_value_count
-                    
+
                     # If native callback didn't call back into NAPI (common when not in Node.js),
                     # call the Python callback directly with data pointer as an External
                     if not native_created_value and func_value is not None and callable(func_value):
@@ -1656,10 +1659,10 @@ def _create_function_table() -> NapiPythonFunctions:
             dispatch()
         else:
             # We're on a background thread with non-blocking mode
-            # For webcodecs and similar libs, we still need to dispatch 
+            # For webcodecs and similar libs, we still need to dispatch
             # immediately because the asyncio event loop won't process
             # queued callbacks until awaited
-            # 
+            #
             # TODO: Consider using a proper queue and async processing
             # For now, dispatch directly (native code handles thread safety)
             dispatch()
@@ -1672,11 +1675,11 @@ def _create_function_table() -> NapiPythonFunctions:
         tsfn_data = _tsfn_store.get(tsfn_id)
         if not tsfn_data:
             return napi_status.napi_invalid_arg
-        
+
         # Check if closing
         if tsfn_data.get("is_closing", False):
             return napi_status.napi_closing
-        
+
         tsfn_data["thread_count"] += 1
         return napi_status.napi_ok
 
@@ -1700,15 +1703,15 @@ def _create_function_table() -> NapiPythonFunctions:
                 # Set closing state
                 is_closing_value = 1 if mode == 1 else 0
                 tsfn_data["is_closing"] = bool(is_closing_value)
-                
+
                 # Mark as closed
                 tsfn_data["closed"] = True
-                
+
                 # Call finalize callback if provided
                 finalize_cb = tsfn_data.get("finalize_cb")
                 finalize_data = tsfn_data.get("finalize_data")
                 context = tsfn_data.get("context")
-                
+
                 if finalize_cb:
                     try:
                         FinalizeCb = CFUNCTYPE(None, c_void_p, c_void_p, c_void_p)
@@ -1717,7 +1720,7 @@ def _create_function_table() -> NapiPythonFunctions:
                         finalize_func(env_id, finalize_data, context)
                     except Exception as e:
                         print(f"[napi-python] TSFN finalize error: {e}")
-                
+
                 # Remove from store
                 _tsfn_store.pop(tsfn_id, None)
 
@@ -2027,7 +2030,7 @@ def _create_function_table() -> NapiPythonFunctions:
         try:
             # Get the constructor class
             constructor = ctx.python_value_from_napi(constructor_handle)
-            
+
             if constructor is None:
                 if result:
                     result[0] = Constant.UNDEFINED
@@ -2075,14 +2078,14 @@ def _create_function_table() -> NapiPythonFunctions:
             return napi_status.napi_invalid_arg
         if not result:
             return napi_status.napi_invalid_arg
-        
+
         try:
             cb_info = ctx.get_callback_info(cbinfo)
             thiz = cb_info.thiz
             fn = cb_info.fn
-            
+
             # Logic from emnapi: check if this is a constructor call
-            # thiz == null || thiz.constructor == null ? 0 
+            # thiz == null || thiz.constructor == null ? 0
             #   : thiz instanceof fn ? thiz.constructor : 0
             if thiz is None:
                 result[0] = Constant.UNDEFINED
@@ -2092,14 +2095,14 @@ def _create_function_table() -> NapiPythonFunctions:
                 # Check if thiz is an instance of the function/class
                 # In Python, fn might be the class itself or a method
                 thiz_type = type(thiz)
-                
+
                 # If fn is callable and thiz is an instance of something fn created
                 if fn is not None and isinstance(thiz, type(thiz)):
                     # Return the constructor (type of thiz)
                     result[0] = ctx.add_value(thiz_type)
                 else:
                     result[0] = Constant.UNDEFINED
-            
+
             return napi_status.napi_ok
         except Exception:
             if result:

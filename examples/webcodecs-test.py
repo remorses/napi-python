@@ -26,16 +26,44 @@ if not addon_path.exists():
 
 try:
     webcodecs = load_addon(str(addon_path))
-    print(f"\nWebcodecs exports: {dir(webcodecs)}")
+    print(f"\nWebcodecs loaded successfully!")
+    print(f"Exports: {len(dir(webcodecs))} items")
 
     # Try to access some exports
-    print("\n=== Checking exports ===")
-    for name in dir(webcodecs):
+    print("\n=== Checking key exports ===")
+    key_exports = [
+        "VideoEncoder",
+        "VideoDecoder",
+        "AudioEncoder",
+        "AudioDecoder",
+        "ImageDecoder",
+        "Mp4Demuxer",
+        "Mp4Muxer",
+        "VideoFrame",
+    ]
+    for name in key_exports:
         try:
             val = getattr(webcodecs, name)
             print(f"  {name}: {type(val).__name__}")
         except Exception as e:
             print(f"  {name}: ERROR - {e}")
+
+    # Check hardware accelerators
+    print("\n=== Hardware Accelerators ===")
+    try:
+        accelerators = webcodecs.getHardwareAccelerators()
+        print(f"  Available: {accelerators}")
+    except Exception as e:
+        print(f"  Error: {e}")
+
+    # Try to get preferred hardware accelerator
+    try:
+        preferred = webcodecs.getPreferredHardwareAccelerator()
+        print(f"  Preferred: {preferred}")
+    except Exception as e:
+        print(f"  Error getting preferred: {e}")
+
+    print("\n=== Webcodecs addon loaded and working! ===")
 
 except Exception as e:
     print(f"\nError loading addon: {e}")

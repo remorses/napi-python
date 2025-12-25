@@ -1837,6 +1837,91 @@ def _create_function_table() -> NapiPythonFunctions:
     )
 
 
+class LibcLoadedFunction:
+    """Wrapper for a function pointer from dlsym to provide CDLL function-like interface."""
+
+    def __init__(self, ptr: int):
+        self._ptr = ptr
+        self._argtypes = None
+        self._restype = None
+        self._func = None
+
+    @property
+    def argtypes(self):
+        return self._argtypes
+
+    @argtypes.setter
+    def argtypes(self, value):
+        self._argtypes = value
+        self._func = None  # Reset cached function
+
+    @property
+    def restype(self):
+        return self._restype
+
+    @restype.setter
+    def restype(self, value):
+        self._restype = value
+        self._func = None  # Reset cached function
+
+    def __call__(self, *args):
+        if self._func is None:
+            # Create CFUNCTYPE from argtypes/restype
+            if self._argtypes is None:
+                func_type = CFUNCTYPE(self._restype or c_void_p)
+            else:
+                func_type = CFUNCTYPE(self._restype or c_void_p, *self._argtypes)
+            self._func = func_type(self._ptr)
+        return self._func(*args)
+
+
+class LibcLoadedLibrary:
+    """Wrapper for libraries loaded via libc.dlopen to provide CDLL-like interface."""
+
+    def __init__(self, handle: int, path: str):
+        self._handle = handle
+        self._path = path
+        self._libc = CDLL("libc.dylib")
+        self._libc.dlsym.argtypes = [c_void_p, c_char_p]
+        self._libc.dlsym.restype = c_void_p
+        self._symbols = {}
+
+    def __getattr__(self, name: str):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        if name in self._symbols:
+            return self._symbols[name]
+        # Look up symbol
+        sym = self._libc.dlsym(self._handle, name.encode())
+        if not sym:
+            raise AttributeError(f"Symbol not found: {name}")
+        func = LibcLoadedFunction(sym)
+        self._symbols[name] = func
+        return func
+
+
+def _load_with_libc_dlopen(path: str):
+    """
+    Load a library using libc.dlopen directly.
+
+    This bypasses Python's CDLL which can have issues with "flat namespace"
+    symbol resolution on macOS.
+    """
+    libc = CDLL("libc.dylib")
+    libc.dlopen.argtypes = [c_char_p, c_int]
+    libc.dlopen.restype = c_void_p
+    libc.dlerror.restype = c_char_p
+
+    RTLD_LAZY = 0x1
+    handle = libc.dlopen(path.encode(), RTLD_LAZY)
+
+    if not handle:
+        err = libc.dlerror()
+        raise OSError(f"dlopen failed: {err.decode() if err else 'unknown error'}")
+
+    return LibcLoadedLibrary(handle, path)
+
+
 def load_addon(path: str) -> ModuleExports:
     """
     Load a Node-API native addon.
@@ -1857,7 +1942,19 @@ def load_addon(path: str) -> ModuleExports:
     try:
         lib = CDLL(str(path))
     except OSError as e:
-        raise NapiError(napi_status.napi_generic_failure, f"Failed to load addon: {e}")
+        # On macOS, Python's CDLL can fail with "flat namespace" errors even when
+        # raw dlopen works. Try using libc.dlopen directly as a fallback.
+        if "flat namespace" in str(e):
+            try:
+                lib = _load_with_libc_dlopen(str(path))
+            except Exception as e2:
+                raise NapiError(
+                    napi_status.napi_generic_failure, f"Failed to load addon: {e2}"
+                )
+        else:
+            raise NapiError(
+                napi_status.napi_generic_failure, f"Failed to load addon: {e}"
+            )
 
     # Find and call the init function
     try:

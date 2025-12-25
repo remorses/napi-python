@@ -185,6 +185,36 @@ FuncCreateTsfn = CFUNCTYPE(
 )
 FuncCallTsfn = CFUNCTYPE(c_int, c_void_p, c_void_p, c_int)
 FuncReleaseTsfn = CFUNCTYPE(c_int, c_void_p, c_int)
+# Class/wrap functions
+FuncWrap = CFUNCTYPE(
+    c_int, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, POINTER(c_void_p)
+)
+FuncUnwrap = CFUNCTYPE(c_int, c_void_p, c_void_p, POINTER(c_void_p))
+FuncDefineClassImpl = CFUNCTYPE(
+    c_int,
+    c_void_p,
+    c_char_p,
+    c_size_t,
+    c_void_p,
+    c_void_p,
+    c_size_t,
+    c_void_p,
+    POINTER(c_void_p),
+)
+
+
+# Property descriptor structure (matches C struct)
+class NapiPropertyDescriptor(Structure):
+    _fields_ = [
+        ("utf8name", c_char_p),
+        ("name", c_void_p),  # napi_value
+        ("method", c_void_p),  # napi_callback
+        ("getter", c_void_p),  # napi_callback
+        ("setter", c_void_p),  # napi_callback
+        ("value", c_void_p),  # napi_value
+        ("attributes", c_uint32),
+        ("data", c_void_p),
+    ]
 
 
 class NapiPythonFunctions(Structure):
@@ -245,6 +275,10 @@ class NapiPythonFunctions(Structure):
         ("create_tsfn", FuncCreateTsfn),
         ("call_tsfn", FuncCallTsfn),
         ("release_tsfn", FuncReleaseTsfn),
+        # Class/wrap functions
+        ("wrap", FuncWrap),
+        ("unwrap", FuncUnwrap),
+        ("define_class_impl", FuncDefineClassImpl),
     ]
 
 
@@ -639,16 +673,30 @@ def _create_function_table() -> NapiPythonFunctions:
 
         return napi_status.napi_ok
 
+    # Storage for wrapped native objects
+    _wrap_store = {}
+    _wrap_counter = [1]
+
     @FuncDefineClass
-    def define_class(env, name, length, constructor, data, prop_count, props, result):
-        # TODO: Implement
-        result[0] = Constant.UNDEFINED
-        return napi_status.napi_ok
+    def define_class(
+        env_id, name, length, constructor, data, prop_count, props, result
+    ):
+        """Define a JavaScript class (legacy - forwards to define_class_impl)."""
+        # This is called by the C shim via the old function pointer
+        # We'll let define_class_impl handle the actual implementation
+        return define_class_impl(
+            env_id, name, length, constructor, data, prop_count, props, result
+        )
 
     @FuncCreateReference
     def create_reference(env, value, initial_refcount, result):
-        # TODO: Implement
-        result[0] = 0
+        # Store the value to prevent GC
+        ref_id = _wrap_counter[0]
+        _wrap_counter[0] += 1
+        py_value = ctx.python_value_from_napi(value)
+        _wrap_store[ref_id] = {"value": py_value, "refcount": initial_refcount}
+        if result:
+            result[0] = ref_id
         return napi_status.napi_ok
 
     @FuncDeleteReference
@@ -732,6 +780,254 @@ def _create_function_table() -> NapiPythonFunctions:
             return napi_status.napi_ok
 
         return napi_status.napi_arraybuffer_expected
+
+    # =========================================================================
+    # Class / Wrap Functions
+    # =========================================================================
+
+    @FuncWrap
+    def wrap(env_id, js_object, native_object, finalize_cb, finalize_hint, result):
+        """Associate a native pointer with a JavaScript object."""
+        env_obj = get_env(env_id)
+        if not env_obj:
+            return napi_status.napi_invalid_arg
+
+        py_obj = ctx.python_value_from_napi(js_object)
+        if py_obj is None:
+            return napi_status.napi_invalid_arg
+
+        # Store the native pointer on the object
+        try:
+            py_obj.__napi_native__ = native_object
+            py_obj.__napi_weak_ref_id__ = None
+            if finalize_cb:
+                py_obj.__napi_weak_ref_id__ = _wrap_counter[0]
+                _wrap_counter[0] += 1
+                _wrap_store[py_obj.__napi_weak_ref_id__] = {
+                    "obj": py_obj,
+                    "native": native_object,
+                    "finalize_cb": finalize_cb,
+                    "finalize_hint": finalize_hint,
+                }
+        except AttributeError:
+            # Object doesn't support attribute assignment, store in dict
+            obj_id = id(py_obj)
+            _wrap_store[obj_id] = native_object
+
+        if result:
+            result[0] = 0  # No reference created
+        return napi_status.napi_ok
+
+    @FuncUnwrap
+    def unwrap(env_id, js_object, result):
+        """Get the native pointer from a JavaScript object."""
+        env_obj = get_env(env_id)
+        if not env_obj:
+            return napi_status.napi_invalid_arg
+
+        py_obj = ctx.python_value_from_napi(js_object)
+        if py_obj is None:
+            return napi_status.napi_invalid_arg
+
+        # Try to get the native pointer
+        try:
+            native_ptr = getattr(py_obj, "__napi_native__", None)
+            if native_ptr is not None:
+                if result:
+                    result[0] = native_ptr
+                return napi_status.napi_ok
+        except AttributeError:
+            pass
+
+        # Try the dict fallback
+        obj_id = id(py_obj)
+        native_ptr = _wrap_store.get(obj_id)
+        if native_ptr is not None:
+            if result:
+                result[0] = native_ptr
+            return napi_status.napi_ok
+
+        if result:
+            result[0] = 0
+        return napi_status.napi_invalid_arg
+
+    @FuncDefineClassImpl
+    def define_class_impl(
+        env_id, name, length, constructor_cb, data, prop_count, props, result
+    ):
+        """Define a JavaScript class with constructor and methods."""
+        env_obj = get_env(env_id)
+        if not env_obj:
+            return napi_status.napi_invalid_arg
+
+        # Get class name
+        try:
+            if name and length > 0 and length < 1000:
+                class_name = name[:length].decode("utf-8", errors="replace")
+            elif name:
+                class_name = name.split(b"\x00")[0].decode("utf-8", errors="replace")
+            else:
+                class_name = "NapiClass"
+        except Exception:
+            class_name = "NapiClass"
+
+        # Cast constructor callback
+        native_ctor = ctypes.cast(
+            constructor_cb, CFUNCTYPE(c_void_p, c_void_p, c_void_p)
+        )
+        _callback_refs.append(native_ctor)
+
+        # Create the wrapper class
+        class NapiClassInstance:
+            """Instance of a NAPI-defined class."""
+
+            __napi_native__ = None
+            __napi_class_name__ = class_name
+
+            def __init__(self, *args):
+                """Call the native constructor."""
+                # Open a scope for this call
+                scope = ctx.open_scope(env_obj)
+                try:
+                    # Set up callback info
+                    scope.callback_info.args = list(args)
+                    scope.callback_info.thiz = self
+                    scope.callback_info.data = data
+                    scope.callback_info.fn = self.__init__
+                    scope.callback_info.new_target = type(self)
+
+                    # Call the native constructor
+                    ret = native_ctor(env_obj.id, scope.id)
+
+                    # The constructor typically calls napi_wrap to associate native data
+                finally:
+                    ctx.close_scope(env_obj, scope)
+
+            def __repr__(self):
+                return f"<{self.__napi_class_name__} instance>"
+
+        # Set class name
+        NapiClassInstance.__name__ = class_name
+        NapiClassInstance.__qualname__ = class_name
+
+        # Process properties (methods, getters, setters)
+        if prop_count > 0 and props:
+            # Calculate property descriptor size
+            prop_size = ctypes.sizeof(NapiPropertyDescriptor)
+
+            for i in range(prop_count):
+                # Read property descriptor
+                prop_ptr = props + (i * prop_size)
+                prop_desc = NapiPropertyDescriptor.from_address(prop_ptr)
+
+                # Get property name
+                if prop_desc.utf8name:
+                    prop_name = prop_desc.utf8name.decode("utf-8", errors="replace")
+                elif prop_desc.name:
+                    prop_name = str(ctx.python_value_from_napi(prop_desc.name))
+                else:
+                    continue
+
+                attributes = prop_desc.attributes
+                is_static = (attributes & 0x400) != 0  # napi_static = 1 << 10
+                prop_data = prop_desc.data
+
+                # Handle method
+                if prop_desc.method:
+                    method_cb = ctypes.cast(
+                        prop_desc.method, CFUNCTYPE(c_void_p, c_void_p, c_void_p)
+                    )
+                    _callback_refs.append(method_cb)
+
+                    def make_method(cb, pdata):
+                        def method(self, *args):
+                            scope = ctx.open_scope(env_obj)
+                            try:
+                                scope.callback_info.args = list(args)
+                                scope.callback_info.thiz = self
+                                scope.callback_info.data = pdata
+                                ret = cb(env_obj.id, scope.id)
+                                if ret:
+                                    return ctx.python_value_from_napi(ret)
+                                return None
+                            finally:
+                                ctx.close_scope(env_obj, scope)
+
+                        return method
+
+                    method_func = make_method(method_cb, prop_data)
+                    method_func.__name__ = prop_name
+
+                    if is_static:
+                        setattr(NapiClassInstance, prop_name, staticmethod(method_func))
+                    else:
+                        setattr(NapiClassInstance, prop_name, method_func)
+
+                # Handle getter/setter
+                elif prop_desc.getter or prop_desc.setter:
+                    fget = None
+                    fset = None
+
+                    if prop_desc.getter:
+                        getter_cb = ctypes.cast(
+                            prop_desc.getter, CFUNCTYPE(c_void_p, c_void_p, c_void_p)
+                        )
+                        _callback_refs.append(getter_cb)
+
+                        def make_getter(cb, pdata):
+                            def getter(self):
+                                scope = ctx.open_scope(env_obj)
+                                try:
+                                    scope.callback_info.args = []
+                                    scope.callback_info.thiz = self
+                                    scope.callback_info.data = pdata
+                                    ret = cb(env_obj.id, scope.id)
+                                    if ret:
+                                        return ctx.python_value_from_napi(ret)
+                                    return None
+                                finally:
+                                    ctx.close_scope(env_obj, scope)
+
+                            return getter
+
+                        fget = make_getter(getter_cb, prop_data)
+
+                    if prop_desc.setter:
+                        setter_cb = ctypes.cast(
+                            prop_desc.setter, CFUNCTYPE(c_void_p, c_void_p, c_void_p)
+                        )
+                        _callback_refs.append(setter_cb)
+
+                        def make_setter(cb, pdata):
+                            def setter(self, value):
+                                scope = ctx.open_scope(env_obj)
+                                try:
+                                    scope.callback_info.args = [value]
+                                    scope.callback_info.thiz = self
+                                    scope.callback_info.data = pdata
+                                    cb(env_obj.id, scope.id)
+                                finally:
+                                    ctx.close_scope(env_obj, scope)
+
+                            return setter
+
+                        fset = make_setter(setter_cb, prop_data)
+
+                    setattr(NapiClassInstance, prop_name, property(fget, fset))
+
+                # Handle value
+                elif prop_desc.value:
+                    value = ctx.python_value_from_napi(prop_desc.value)
+                    setattr(NapiClassInstance, prop_name, value)
+
+        # Keep reference to prevent GC
+        _callback_refs.append(NapiClassInstance)
+
+        # Return the class as a handle
+        if result:
+            result[0] = ctx.add_value(NapiClassInstance)
+
+        return napi_status.napi_ok
 
     # =========================================================================
     # Promise Functions
@@ -1024,6 +1320,9 @@ def _create_function_table() -> NapiPythonFunctions:
             create_tsfn,
             call_tsfn,
             release_tsfn,
+            wrap,
+            unwrap,
+            define_class_impl,
         ]
     )
 
@@ -1080,6 +1379,9 @@ def _create_function_table() -> NapiPythonFunctions:
         create_tsfn=create_tsfn,
         call_tsfn=call_tsfn,
         release_tsfn=release_tsfn,
+        wrap=wrap,
+        unwrap=unwrap,
+        define_class_impl=define_class_impl,
     )
 
 

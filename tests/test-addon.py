@@ -70,10 +70,23 @@ result = addon.divide(10, 2)
 print(f"divide(10, 2) = {result}")
 assert result == 5, f"Expected 5, got {result}"
 
-# TODO: Test class once napi_define_class is implemented
-# print("\n=== Class ===")
-# counter = addon.Counter(10)
-# print(f"Counter(10).value = {counter.value}")
+# Test class
+print("\n=== Class ===")
+counter = addon.Counter(10)
+print(f"Counter(10).value = {counter.value}")
+assert counter.value == 10, f"Expected 10, got {counter.value}"
+
+counter.increment()
+print(f"After increment(): {counter.value}")
+assert counter.value == 11, f"Expected 11, got {counter.value}"
+
+counter.add(5)
+print(f"After add(5): {counter.value}")
+assert counter.value == 16, f"Expected 16, got {counter.value}"
+
+counter.reset()
+print(f"After reset(): {counter.value}")
+assert counter.value == 0, f"Expected 0, got {counter.value}"
 
 print("\n=== Summary ===")
 print("Working:")
@@ -82,10 +95,10 @@ print("  - Arrays (doubleArray, arrayLength)")
 print("  - Callbacks (callWithValue, mapAndSum)")
 print("  - Optional values (maybeDouble, greetOptional)")
 print("  - Division")
+print("  - Classes (Counter with methods and properties)")
 print("")
 print("Known issues:")
 print("  - String arguments get truncated in some cases")
-print("  - Classes not yet implemented (napi_define_class)")
 print("  - Error throwing not yet implemented")
 
 print("\n=== Core tests passed! ===")

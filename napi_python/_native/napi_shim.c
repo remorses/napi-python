@@ -160,6 +160,10 @@ typedef struct {
     napi_status (*create_tsfn)(napi_env env, napi_value func, napi_value async_resource, napi_value async_resource_name, size_t max_queue_size, size_t initial_thread_count, void* thread_finalize_data, napi_finalize thread_finalize_cb, void* context, void* call_js_cb, void** result);
     napi_status (*call_tsfn)(void* func, void* data, int is_blocking);
     napi_status (*release_tsfn)(void* func, int mode);
+    // Class/wrap functions
+    napi_status (*wrap)(napi_env env, napi_value js_object, void* native_object, napi_finalize finalize_cb, void* finalize_hint, napi_ref* result);
+    napi_status (*unwrap)(napi_env env, napi_value js_object, void** result);
+    napi_status (*define_class_impl)(napi_env env, const char* utf8name, size_t length, napi_callback constructor, void* data, size_t property_count, const napi_property_descriptor* properties, napi_value* result);
 } NapiPythonFunctions;
 
 // Global function table
@@ -372,7 +376,7 @@ napi_status napi_call_function(napi_env env, napi_value recv, napi_value func, s
 
 napi_status napi_define_class(napi_env env, const char* utf8name, size_t length, napi_callback constructor, void* data, size_t property_count, const napi_property_descriptor* properties, napi_value* result) {
     CHECK_FUNCS();
-    if (g_funcs->define_class) return g_funcs->define_class(env, utf8name, length, constructor, data, property_count, properties, result);
+    if (g_funcs->define_class_impl) return g_funcs->define_class_impl(env, utf8name, length, constructor, data, property_count, properties, result);
     return napi_generic_failure;
 }
 
@@ -510,18 +514,29 @@ napi_status napi_create_array_with_length(napi_env env, size_t length, napi_valu
 }
 
 napi_status napi_wrap(napi_env env, napi_value js_object, void* native_object, napi_finalize finalize_cb, void* finalize_hint, napi_ref* result) {
-    // TODO: Implement wrap
+    CHECK_FUNCS();
+    if (g_funcs->wrap) {
+        return g_funcs->wrap(env, js_object, native_object, finalize_cb, finalize_hint, result);
+    }
     if (result) *result = NULL;
     return napi_ok;
 }
 
 napi_status napi_unwrap(napi_env env, napi_value js_object, void** result) {
-    // TODO: Implement unwrap
+    CHECK_FUNCS();
+    if (g_funcs->unwrap) {
+        return g_funcs->unwrap(env, js_object, result);
+    }
     if (result) *result = NULL;
     return napi_ok;
 }
 
 napi_status napi_remove_wrap(napi_env env, napi_value js_object, void** result) {
+    // For now, just call unwrap
+    CHECK_FUNCS();
+    if (g_funcs->unwrap) {
+        return g_funcs->unwrap(env, js_object, result);
+    }
     if (result) *result = NULL;
     return napi_ok;
 }

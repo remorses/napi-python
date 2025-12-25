@@ -432,7 +432,6 @@ def _init_shim() -> CDLL:
     # Register with the shim
     set_funcs(byref(_func_table))
 
-    print(f"[napi-python] Loaded shim: {shim_path}")
     return _shim_lib
 
 
@@ -2522,9 +2521,7 @@ def load_addon(path: str) -> ModuleExports:
     try:
         exports_handle = ctx.add_value(exports)
 
-        print(f"[napi-python] Calling init function...")
         result = init_fn(env.id, exports_handle)
-        print(f"[napi-python] Init returned: {result}")
 
         # Get updated exports
         if result:

@@ -46,17 +46,17 @@ async def transcode():
     audio_chunks = []
     frames = []
     encoded_chunks = []
+    errors = []
 
     def on_video_chunk(chunk):
-        print(f"  [videoOutput] Got chunk: {chunk}")
         video_chunks.append(chunk)
 
     def on_audio_chunk(chunk):
-        print(f"  [audioOutput] Got chunk: {chunk}")
         audio_chunks.append(chunk)
 
     def on_error(e):
-        print(f"  [error] Demuxer error: {e}")
+        errors.append(str(e))
+        print(f"  [error] {e}")
 
     print("\n=== Creating Mp4Demuxer ===")
     demuxer = webcodecs.Mp4Demuxer(
@@ -77,8 +77,7 @@ async def transcode():
         result = await result
         print(f"Load completed: {result}")
 
-    print(f"Video chunks received: {len(video_chunks)}")
-    print(f"Audio chunks received: {len(audio_chunks)}")
+    print(f"State after load: {demuxer.state}")
 
     print("\n=== Getting decoder config ===")
     config = demuxer.videoDecoderConfig
@@ -89,111 +88,46 @@ async def transcode():
 
     # Get track info
     print("\n=== Track info ===")
-    try:
-        tracks = demuxer.tracks
-        print(f"Tracks: {tracks}")
-    except Exception as e:
-        print(f"Error getting tracks: {e}")
+    tracks = demuxer.tracks
+    print(f"Tracks: {tracks}")
 
-    try:
-        duration = demuxer.duration
-        print(f"Duration: {duration} microseconds")
-    except Exception as e:
-        print(f"Error getting duration: {e}")
+    duration = demuxer.duration
+    print(f"Duration: {duration} microseconds ({duration / 1000000:.2f}s)")
 
-    print("\n=== Demuxing packets ===")
-    # Call demux() to extract packets and call callbacks
-    # demux() can take an optional count argument
+    print("\n=== Demuxing all packets ===")
+    # Call demux() to extract all packets
+    # demux() spawns a thread and returns immediately
+    # Callbacks are invoked asynchronously
     print("Calling demux()...")
-    demux_result = demuxer.demux()
-    print(f"Demux result: {demux_result}")
-    print(f"Video chunks after demux: {len(video_chunks)}")
-    print(f"Audio chunks after demux: {len(audio_chunks)}")
+    demuxer.demux()
 
-    # Try demuxing in batches
-    if not video_chunks:
-        print("\nTrying demux(100)...")
-        demux_result = demuxer.demux(100)
-        print(f"Demux(100) result: {demux_result}")
-        print(f"Video chunks: {len(video_chunks)}")
-        print(f"Audio chunks: {len(audio_chunks)}")
+    # Wait for demuxing to complete
+    print("Waiting for demux to complete...")
+    while demuxer.state == "demuxing":
+        await asyncio.sleep(0.1)
 
-    # Try calling demux until we get some chunks
-    attempts = 0
-    while not video_chunks and attempts < 5:
-        attempts += 1
-        print(f"\nDemux attempt {attempts}...")
-        demux_result = demuxer.demux()
-        print(
-            f"Result: {demux_result}, video: {len(video_chunks)}, audio: {len(audio_chunks)}"
-        )
+    print(f"Final state: {demuxer.state}")
+    print(f"Video chunks received: {len(video_chunks)}")
+    print(f"Audio chunks received: {len(audio_chunks)}")
+    if errors:
+        print(f"Errors encountered: {len(errors)}")
 
-    if config:
-        print("\n=== Creating VideoDecoder ===")
-        decoder = webcodecs.VideoDecoder(
-            {
-                "output": lambda frame: frames.append(frame),
-                "error": lambda e: print(f"Decoder error: {e}"),
-            }
-        )
-        print(f"Decoder created: {decoder}")
+    # Note: The chunks are External objects containing native pointers
+    # In a full implementation, you would need to decode these using VideoDecoder/AudioDecoder
+    # For now, we just count them to verify the demuxing works
 
-        print("Configuring decoder...")
-        decoder.configure(config)
+    if video_chunks:
+        print(f"\nFirst video chunk: {video_chunks[0]}")
+        print(f"Last video chunk: {video_chunks[-1]}")
 
-        print(f"Decoding {len(video_chunks)} chunks...")
-        for i, chunk in enumerate(video_chunks[:10]):  # First 10 for testing
-            decoder.decode(chunk)
-            if i % 10 == 0:
-                print(f"  Decoded chunk {i}")
-
-        print("Flushing decoder...")
-        flush_result = decoder.flush()
-        if asyncio.isfuture(flush_result) or asyncio.iscoroutine(flush_result):
-            flush_result = await flush_result
-
-        print(f"Frames decoded: {len(frames)}")
-
-    if frames:
-        print("\n=== Creating VideoEncoder ===")
-        encoder = webcodecs.VideoEncoder(
-            {
-                "output": lambda chunk, metadata: encoded_chunks.append(
-                    (chunk, metadata)
-                ),
-                "error": lambda e: print(f"Encoder error: {e}"),
-            }
-        )
-        print(f"Encoder created: {encoder}")
-
-        # Configure encoder (H.264, same resolution as input)
-        encoder.configure(
-            {
-                "codec": "avc1.42001f",
-                "width": 1280,
-                "height": 720,
-                "bitrate": 1_000_000,
-                "framerate": 30,
-            }
-        )
-
-        print(f"Encoding {len(frames)} frames...")
-        for i, frame in enumerate(frames[:10]):  # First 10 for testing
-            encoder.encode(frame)
-            if i % 10 == 0:
-                print(f"  Encoded frame {i}")
-
-        print("Flushing encoder...")
-        flush_result = encoder.flush()
-        if asyncio.isfuture(flush_result) or asyncio.iscoroutine(flush_result):
-            flush_result = await flush_result
-
-        print(f"Encoded chunks: {len(encoded_chunks)}")
+    if audio_chunks:
+        print(f"\nFirst audio chunk: {audio_chunks[0]}")
+        print(f"Last audio chunk: {audio_chunks[-1]}")
 
     print("\n=== Summary ===")
     print(f"Video chunks: {len(video_chunks)}")
     print(f"Audio chunks: {len(audio_chunks)}")
-    print(f"Frames: {len(frames)}")
+    print(f"Frames decoded: {len(frames)}")
     print(f"Encoded chunks: {len(encoded_chunks)}")
 
 

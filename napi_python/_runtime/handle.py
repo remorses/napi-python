@@ -52,9 +52,7 @@ class HandleStore(BaseArrayStore):
         # Grow if needed
         while id >= len(self._values):
             self._values.extend([None] * (len(self._values) // 2 + 16))
-        old_value = self._values[id] if id < len(self._values) else None
         self._values[id] = value
-        print(f"[HandleStore] push: id={id}, value={value}, old_value={old_value}")
         return id
 
     def get(self, id: int) -> Any:
@@ -88,7 +86,6 @@ class HandleStore(BaseArrayStore):
 
         If weak=True, convert to weak references instead of deleting.
         """
-        print(f"[HandleStore] erase: start={start}, end={end}, weak={weak}")
         self._allocator.next = start
 
         if not weak:

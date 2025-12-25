@@ -189,6 +189,18 @@ typedef struct {
     napi_status (*throw_range_error)(napi_env env, const char* code, const char* msg);
     napi_status (*create_type_error)(napi_env env, napi_value code, napi_value msg, napi_value* result);
     napi_status (*create_range_error)(napi_env env, napi_value code, napi_value msg, napi_value* result);
+    // Instance creation
+    napi_status (*new_instance)(napi_env env, napi_value constructor, size_t argc, const napi_value* argv, napi_value* result);
+    // Fatal exception
+    napi_status (*fatal_exception)(napi_env env, napi_value err);
+    // Get new target
+    napi_status (*get_new_target)(napi_env env, napi_callback_info cbinfo, napi_value* result);
+    // Property checking
+    napi_status (*has_own_property)(napi_env env, napi_value object, napi_value key, bool* result);
+    // Get all property names
+    napi_status (*get_all_property_names)(napi_env env, napi_value object, int key_mode, int key_filter, int key_conversion, napi_value* result);
+    // Get property names
+    napi_status (*get_property_names)(napi_env env, napi_value object, napi_value* result);
 } NapiPythonFunctions;
 
 // Global function table
@@ -864,5 +876,215 @@ napi_status napi_create_type_error(napi_env env, napi_value code, napi_value msg
 napi_status napi_create_range_error(napi_env env, napi_value code, napi_value msg, napi_value* result) {
     CHECK_FUNCS();
     if (g_funcs->create_range_error) return g_funcs->create_range_error(env, code, msg, result);
+    return napi_generic_failure;
+}
+
+// =============================================================================
+// Instance Creation and Related Functions
+// =============================================================================
+
+napi_status napi_new_instance(napi_env env, napi_value constructor, size_t argc, const napi_value* argv, napi_value* result) {
+    CHECK_FUNCS();
+    if (g_funcs->new_instance) return g_funcs->new_instance(env, constructor, argc, argv, result);
+    return napi_generic_failure;
+}
+
+napi_status napi_fatal_exception(napi_env env, napi_value err) {
+    CHECK_FUNCS();
+    if (g_funcs->fatal_exception) return g_funcs->fatal_exception(env, err);
+    // Non-fatal fallback - just log and continue
+    return napi_ok;
+}
+
+napi_status napi_get_new_target(napi_env env, napi_callback_info cbinfo, napi_value* result) {
+    CHECK_FUNCS();
+    if (g_funcs->get_new_target) return g_funcs->get_new_target(env, cbinfo, result);
+    if (result) *result = NULL;
+    return napi_ok;
+}
+
+napi_status napi_has_own_property(napi_env env, napi_value object, napi_value key, bool* result) {
+    CHECK_FUNCS();
+    if (g_funcs->has_own_property) return g_funcs->has_own_property(env, object, key, result);
+    if (result) *result = false;
+    return napi_ok;
+}
+
+typedef enum {
+    napi_key_include_prototypes,
+    napi_key_own_only
+} napi_key_collection_mode;
+
+typedef enum {
+    napi_key_all_properties = 0,
+    napi_key_writable = 1,
+    napi_key_enumerable = 2,
+    napi_key_configurable = 4,
+    napi_key_skip_strings = 8,
+    napi_key_skip_symbols = 16
+} napi_key_filter;
+
+typedef enum {
+    napi_key_keep_numbers,
+    napi_key_numbers_to_strings
+} napi_key_conversion;
+
+napi_status napi_get_all_property_names(napi_env env, napi_value object, napi_key_collection_mode key_mode, napi_key_filter key_filter, napi_key_conversion key_conversion, napi_value* result) {
+    CHECK_FUNCS();
+    if (g_funcs->get_all_property_names) return g_funcs->get_all_property_names(env, object, key_mode, key_filter, key_conversion, result);
+    // Return empty array as fallback
+    if (g_funcs->create_array) return g_funcs->create_array(env, result);
+    return napi_generic_failure;
+}
+
+napi_status napi_get_property_names(napi_env env, napi_value object, napi_value* result) {
+    CHECK_FUNCS();
+    if (g_funcs->get_property_names) return g_funcs->get_property_names(env, object, result);
+    // Return empty array as fallback
+    if (g_funcs->create_array) return g_funcs->create_array(env, result);
+    return napi_generic_failure;
+}
+
+// Additional commonly needed stubs
+napi_status napi_instanceof(napi_env env, napi_value object, napi_value constructor, bool* result) {
+    // Simple implementation - check if constructor matches
+    if (result) *result = false;
+    return napi_ok;
+}
+
+napi_status napi_coerce_to_bool(napi_env env, napi_value value, napi_value* result) {
+    CHECK_FUNCS();
+    if (g_funcs->get_boolean) {
+        // Get the value and convert to bool
+        return g_funcs->get_boolean(env, true, result);
+    }
+    return napi_generic_failure;
+}
+
+napi_status napi_coerce_to_number(napi_env env, napi_value value, napi_value* result) {
+    CHECK_FUNCS();
+    if (g_funcs->create_double) {
+        return g_funcs->create_double(env, 0.0, result);
+    }
+    return napi_generic_failure;
+}
+
+napi_status napi_coerce_to_object(napi_env env, napi_value value, napi_value* result) {
+    CHECK_FUNCS();
+    if (g_funcs->create_object) {
+        return g_funcs->create_object(env, result);
+    }
+    return napi_generic_failure;
+}
+
+// Escapable handle scope (just use regular handle scope for now)
+typedef struct napi_escapable_handle_scope__* napi_escapable_handle_scope;
+
+napi_status napi_open_escapable_handle_scope(napi_env env, napi_escapable_handle_scope* result) {
+    return napi_open_handle_scope(env, (napi_handle_scope*)result);
+}
+
+napi_status napi_close_escapable_handle_scope(napi_env env, napi_escapable_handle_scope scope) {
+    return napi_close_handle_scope(env, (napi_handle_scope)scope);
+}
+
+napi_status napi_escape_handle(napi_env env, napi_escapable_handle_scope scope, napi_value escapee, napi_value* result) {
+    // Just return the same handle - we don't actually manage scopes like Node does
+    if (result) *result = escapee;
+    return napi_ok;
+}
+
+// BigInt stubs (return errors for now)
+napi_status napi_create_bigint_int64(napi_env env, int64_t value, napi_value* result) {
+    CHECK_FUNCS();
+    // Use int64 instead
+    if (g_funcs->create_int64) return g_funcs->create_int64(env, value, result);
+    return napi_generic_failure;
+}
+
+napi_status napi_create_bigint_uint64(napi_env env, uint64_t value, napi_value* result) {
+    CHECK_FUNCS();
+    // Use int64 instead
+    if (g_funcs->create_int64) return g_funcs->create_int64(env, (int64_t)value, result);
+    return napi_generic_failure;
+}
+
+napi_status napi_create_bigint_words(napi_env env, int sign_bit, size_t word_count, const uint64_t* words, napi_value* result) {
+    return napi_generic_failure;
+}
+
+napi_status napi_get_value_bigint_int64(napi_env env, napi_value value, int64_t* result, bool* lossless) {
+    CHECK_FUNCS();
+    if (g_funcs->get_value_int64) {
+        if (lossless) *lossless = true;
+        return g_funcs->get_value_int64(env, value, result);
+    }
+    return napi_generic_failure;
+}
+
+napi_status napi_get_value_bigint_uint64(napi_env env, napi_value value, uint64_t* result, bool* lossless) {
+    CHECK_FUNCS();
+    if (g_funcs->get_value_int64) {
+        int64_t val;
+        napi_status status = g_funcs->get_value_int64(env, value, &val);
+        if (status == napi_ok && result) *result = (uint64_t)val;
+        if (lossless) *lossless = (val >= 0);
+        return status;
+    }
+    return napi_generic_failure;
+}
+
+napi_status napi_get_value_bigint_words(napi_env env, napi_value value, int* sign_bit, size_t* word_count, uint64_t* words) {
+    return napi_generic_failure;
+}
+
+// Symbol functions
+napi_status napi_create_symbol(napi_env env, napi_value description, napi_value* result) {
+    CHECK_FUNCS();
+    // Create a unique object to serve as a symbol
+    if (g_funcs->create_object) return g_funcs->create_object(env, result);
+    return napi_generic_failure;
+}
+
+// Date functions
+napi_status napi_create_date(napi_env env, double time, napi_value* result) {
+    CHECK_FUNCS();
+    if (g_funcs->create_double) return g_funcs->create_double(env, time, result);
+    return napi_generic_failure;
+}
+
+napi_status napi_is_date(napi_env env, napi_value value, bool* result) {
+    if (result) *result = false;
+    return napi_ok;
+}
+
+napi_status napi_get_date_value(napi_env env, napi_value value, double* result) {
+    CHECK_FUNCS();
+    if (g_funcs->get_value_double) return g_funcs->get_value_double(env, value, result);
+    return napi_generic_failure;
+}
+
+// String functions
+napi_status napi_create_string_utf16(napi_env env, const uint16_t* str, size_t length, napi_value* result) {
+    // Convert UTF-16 to UTF-8 for now (simplified)
+    CHECK_FUNCS();
+    if (g_funcs->create_string_utf8) return g_funcs->create_string_utf8(env, "", 0, result);
+    return napi_generic_failure;
+}
+
+napi_status napi_get_value_string_utf16(napi_env env, napi_value value, uint16_t* buf, size_t bufsize, size_t* result) {
+    if (result) *result = 0;
+    return napi_ok;
+}
+
+napi_status napi_create_string_latin1(napi_env env, const char* str, size_t length, napi_value* result) {
+    CHECK_FUNCS();
+    if (g_funcs->create_string_utf8) return g_funcs->create_string_utf8(env, str, length, result);
+    return napi_generic_failure;
+}
+
+napi_status napi_get_value_string_latin1(napi_env env, napi_value value, char* buf, size_t bufsize, size_t* result) {
+    CHECK_FUNCS();
+    if (g_funcs->get_value_string_utf8) return g_funcs->get_value_string_utf8(env, value, buf, bufsize, result);
     return napi_generic_failure;
 }

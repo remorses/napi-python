@@ -838,7 +838,7 @@ def _create_function_table() -> NapiPythonFunctions:
         # Call the function
         try:
             # Check if this is a wrapped NAPI function that needs callback_info
-            if hasattr(py_func, '__name__') and py_recv is not None:
+            if hasattr(py_func, "__name__") and py_recv is not None:
                 # For wrapped NAPI functions, we need to set up scope with thiz
                 # Check if this function was created by our create_function
                 # by checking for our wrapper signature
@@ -1603,7 +1603,13 @@ def _create_function_table() -> NapiPythonFunctions:
                         # Store the callback in the handle store at a high index
                         # that won't get erased by scope management
                         persistent_handle = 0x10000000 + func_ref
-                        ctx._handle_store._values.extend([None] * max(0, persistent_handle + 1 - len(ctx._handle_store._values)))
+                        ctx._handle_store._values.extend(
+                            [None]
+                            * max(
+                                0,
+                                persistent_handle + 1 - len(ctx._handle_store._values),
+                            )
+                        )
                         ctx._handle_store._values[persistent_handle] = func_value
                         js_callback = persistent_handle
                     elif func_value is not None:
@@ -1619,7 +1625,10 @@ def _create_function_table() -> NapiPythonFunctions:
                         call_js_cb(env_id, js_callback, context, data)
                     except Exception as exc:
                         import traceback
-                        print(f"[napi-python] call_js_cb exception in TSFN dispatch: {exc}")
+
+                        print(
+                            f"[napi-python] call_js_cb exception in TSFN dispatch: {exc}"
+                        )
                         traceback.print_exc()
                         # Native callback may fail, continue with workaround
 
@@ -1629,7 +1638,11 @@ def _create_function_table() -> NapiPythonFunctions:
 
                     # If native callback didn't call back into NAPI (common when not in Node.js),
                     # call the Python callback directly with data pointer as an External
-                    if not native_created_value and func_value is not None and callable(func_value):
+                    if (
+                        not native_created_value
+                        and func_value is not None
+                        and callable(func_value)
+                    ):
                         # Create an External value wrapping the native data pointer
                         # This allows advanced users to access the raw data if needed
                         try:
@@ -2089,7 +2102,7 @@ def _create_function_table() -> NapiPythonFunctions:
             #   : thiz instanceof fn ? thiz.constructor : 0
             if thiz is None:
                 result[0] = Constant.UNDEFINED
-            elif not hasattr(thiz, '__class__'):
+            elif not hasattr(thiz, "__class__"):
                 result[0] = Constant.UNDEFINED
             else:
                 # Check if thiz is an instance of the function/class

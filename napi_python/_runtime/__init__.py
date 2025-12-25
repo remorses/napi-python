@@ -7,6 +7,7 @@ from .handle_scope import HandleScope, EscapableHandleScope, CallbackInfo
 from .scope_store import ScopeStore
 from .store import ArrayStore, BaseArrayStore
 from .ref_tracker import RefTracker
+from .reference import Reference, ReferenceWithData, ReferenceWithFinalizer, ReferenceOwnership
 from .external import External, is_external, get_external_value
 from .disposable import Disposable
 
@@ -23,6 +24,10 @@ __all__ = [
     "ArrayStore",
     "BaseArrayStore",
     "RefTracker",
+    "Reference",
+    "ReferenceWithData",
+    "ReferenceWithFinalizer",
+    "ReferenceOwnership",
     "External",
     "is_external",
     "get_external_value",

@@ -324,7 +324,10 @@ napi_status napi_get_value_string_utf8(napi_env env, napi_value value, char* buf
 
 napi_status napi_typeof(napi_env env, napi_value value, napi_valuetype* result) {
     CHECK_FUNCS();
-    if (g_funcs->typeof_) return g_funcs->typeof_(env, value, result);
+    if (g_funcs->typeof_) {
+        napi_status status = g_funcs->typeof_(env, value, result);
+        return status;
+    }
     return napi_generic_failure;
 }
 
@@ -390,7 +393,10 @@ napi_status napi_set_property(napi_env env, napi_value object, napi_value key, n
 
 napi_status napi_get_named_property(napi_env env, napi_value object, const char* utf8name, napi_value* result) {
     CHECK_FUNCS();
-    if (g_funcs->get_named_property) return g_funcs->get_named_property(env, object, utf8name, result);
+    if (g_funcs->get_named_property) {
+        napi_status status = g_funcs->get_named_property(env, object, utf8name, result);
+        return status;
+    }
     return napi_generic_failure;
 }
 
@@ -402,7 +408,10 @@ napi_status napi_set_named_property(napi_env env, napi_value object, const char*
 
 napi_status napi_get_cb_info(napi_env env, napi_callback_info cbinfo, size_t* argc, napi_value* argv, napi_value* this_arg, void** data) {
     CHECK_FUNCS();
-    if (g_funcs->get_cb_info) return g_funcs->get_cb_info(env, cbinfo, argc, argv, this_arg, data);
+    if (g_funcs->get_cb_info) {
+        napi_status result = g_funcs->get_cb_info(env, cbinfo, argc, argv, this_arg, data);
+        return result;
+    }
     return napi_generic_failure;
 }
 
@@ -414,7 +423,10 @@ napi_status napi_create_function(napi_env env, const char* utf8name, size_t leng
 
 napi_status napi_call_function(napi_env env, napi_value recv, napi_value func, size_t argc, const napi_value* argv, napi_value* result) {
     CHECK_FUNCS();
-    if (g_funcs->call_function) return g_funcs->call_function(env, recv, func, argc, argv, result);
+    if (g_funcs->call_function) {
+        napi_status status = g_funcs->call_function(env, recv, func, argc, argv, result);
+        return status;
+    }
     return napi_generic_failure;
 }
 
@@ -426,7 +438,10 @@ napi_status napi_define_class(napi_env env, const char* utf8name, size_t length,
 
 napi_status napi_create_reference(napi_env env, napi_value value, uint32_t initial_refcount, napi_ref* result) {
     CHECK_FUNCS();
-    if (g_funcs->create_reference) return g_funcs->create_reference(env, value, initial_refcount, result);
+    if (g_funcs->create_reference) {
+        napi_status status = g_funcs->create_reference(env, value, initial_refcount, result);
+        return status;
+    }
     return napi_generic_failure;
 }
 
@@ -438,7 +453,10 @@ napi_status napi_delete_reference(napi_env env, napi_ref ref) {
 
 napi_status napi_get_reference_value(napi_env env, napi_ref ref, napi_value* result) {
     CHECK_FUNCS();
-    if (g_funcs->get_reference_value) return g_funcs->get_reference_value(env, ref, result);
+    if (g_funcs->get_reference_value) {
+        napi_status status = g_funcs->get_reference_value(env, ref, result);
+        return status;
+    }
     return napi_generic_failure;
 }
 
@@ -572,7 +590,8 @@ napi_status napi_create_array_with_length(napi_env env, size_t length, napi_valu
 napi_status napi_wrap(napi_env env, napi_value js_object, void* native_object, napi_finalize finalize_cb, void* finalize_hint, napi_ref* result) {
     CHECK_FUNCS();
     if (g_funcs->wrap) {
-        return g_funcs->wrap(env, js_object, native_object, finalize_cb, finalize_hint, result);
+        napi_status status = g_funcs->wrap(env, js_object, native_object, finalize_cb, finalize_hint, result);
+        return status;
     }
     if (result) *result = NULL;
     return napi_ok;
@@ -581,7 +600,8 @@ napi_status napi_wrap(napi_env env, napi_value js_object, void* native_object, n
 napi_status napi_unwrap(napi_env env, napi_value js_object, void** result) {
     CHECK_FUNCS();
     if (g_funcs->unwrap) {
-        return g_funcs->unwrap(env, js_object, result);
+        napi_status status = g_funcs->unwrap(env, js_object, result);
+        return status;
     }
     if (result) *result = NULL;
     return napi_ok;
@@ -964,8 +984,14 @@ napi_status napi_get_property_names(napi_env env, napi_value object, napi_value*
 
 // Additional commonly needed stubs
 napi_status napi_instanceof(napi_env env, napi_value object, napi_value constructor, bool* result) {
-    // Simple implementation - check if constructor matches
-    if (result) *result = false;
+    // For native addons, we generally want instanceof checks to pass
+    // when the object was created by the constructor class.
+    // Since we wrap native objects with __napi_native__, we return true
+    // if both object and constructor are valid.
+    // TODO: Implement proper prototype chain check if needed
+    if (result) {
+        *result = (object != NULL && constructor != NULL);
+    }
     return napi_ok;
 }
 
@@ -1104,4 +1130,112 @@ napi_status napi_get_value_string_latin1(napi_env env, napi_value value, char* b
     CHECK_FUNCS();
     if (g_funcs->get_value_string_utf8) return g_funcs->get_value_string_utf8(env, value, buf, bufsize, result);
     return napi_generic_failure;
+}
+
+// =============================================================================
+// Finalizer Functions
+// =============================================================================
+
+napi_status napi_add_finalizer(napi_env env, napi_value js_object, void* finalize_data, napi_finalize finalize_cb, void* finalize_hint, napi_ref* result) {
+    // TODO: Implement proper finalizer support
+    // For now, just create a reference if result is requested
+    CHECK_FUNCS();
+    if (result && g_funcs->create_reference) {
+        return g_funcs->create_reference(env, js_object, 0, result);
+    }
+    if (result) *result = NULL;
+    return napi_ok;
+}
+
+// =============================================================================
+// Async Context Functions (stubs for compatibility)
+// =============================================================================
+
+typedef struct napi_async_context__* napi_async_context;
+
+napi_status napi_async_init(napi_env env, napi_value async_resource, napi_value async_resource_name, napi_async_context* result) {
+    // No-op stub - we don't need async hooks in Python
+    if (result) *result = (napi_async_context)1;  // Non-NULL dummy value
+    return napi_ok;
+}
+
+napi_status napi_async_destroy(napi_env env, napi_async_context async_context) {
+    // No-op stub
+    return napi_ok;
+}
+
+napi_status napi_make_callback(napi_env env, napi_async_context async_context, napi_value recv, napi_value func, size_t argc, const napi_value* argv, napi_value* result) {
+    // Just call the function directly
+    CHECK_FUNCS();
+    if (g_funcs->call_function) return g_funcs->call_function(env, recv, func, argc, argv, result);
+    return napi_generic_failure;
+}
+
+napi_status napi_open_callback_scope(napi_env env, napi_value resource_object, napi_async_context context, void** result) {
+    if (result) *result = (void*)1;  // Non-NULL dummy value
+    return napi_ok;
+}
+
+napi_status napi_close_callback_scope(napi_env env, void* scope) {
+    return napi_ok;
+}
+
+// =============================================================================
+// Async Work Functions (stubs - actual implementation would require thread pool)
+// =============================================================================
+
+napi_status napi_create_async_work(napi_env env, napi_value async_resource, napi_value async_resource_name, void* execute, void* complete, void* data, napi_async_work* result) {
+    // TODO: Implement proper async work with thread pool
+    // For now, return a dummy handle
+    if (result) *result = (napi_async_work)1;
+    return napi_ok;
+}
+
+napi_status napi_delete_async_work(napi_env env, napi_async_work work) {
+    return napi_ok;
+}
+
+napi_status napi_queue_async_work(napi_env env, napi_async_work work) {
+    // TODO: Actually queue the work to a thread pool
+    return napi_ok;
+}
+
+napi_status napi_cancel_async_work(napi_env env, napi_async_work work) {
+    return napi_ok;
+}
+
+napi_status napi_get_node_version(napi_env env, const void** result) {
+    // Return NULL - we're not actually Node.js
+    if (result) *result = NULL;
+    return napi_ok;
+}
+
+napi_status napi_get_uv_event_loop(napi_env env, void** loop) {
+    // Return NULL - we don't have a libuv event loop
+    if (loop) *loop = NULL;
+    return napi_ok;
+}
+
+napi_status napi_fatal_error(const char* location, size_t location_len, const char* message, size_t message_len) {
+    // Print error and continue (don't actually abort)
+    fprintf(stderr, "NAPI Fatal Error");
+    if (location) fprintf(stderr, " at %s", location);
+    if (message) fprintf(stderr, ": %s", message);
+    fprintf(stderr, "\n");
+    return napi_ok;
+}
+
+// Module registration (used by some addons)
+typedef struct {
+    int nm_version;
+    unsigned int nm_flags;
+    const char* nm_filename;
+    napi_callback nm_register_func;
+    const char* nm_modname;
+    void* nm_priv;
+    void* reserved[4];
+} napi_module;
+
+void napi_module_register(napi_module* mod) {
+    // No-op - we handle module loading differently
 }

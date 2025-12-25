@@ -13,3 +13,5 @@ some files inside tests are written in python and can be used to validate change
 if you skip code when adding the NAPI code mark these lines with TODO comments so it is easy to spot these places in the future
 
 for all cases in python where we handle exception with `except Exception:` where you ignore the error always add a print and not only `pass`. this way we do not miss important context in logs.
+
+for running examples we also try using the @napi.rs/webcodecs npm package. the source code is cloned in ./webcodecs-node folder

@@ -1,0 +1,44 @@
+"""Test loading @napi-rs/webcodecs addon."""
+
+import sys
+from pathlib import Path
+
+# Add parent to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from napi_python import load_addon
+
+# Find the webcodecs .node file
+addon_path = (
+    Path(__file__).parent.parent
+    / "node_modules"
+    / "@napi-rs"
+    / "webcodecs-darwin-arm64"
+    / "webcodecs.darwin-arm64.node"
+)
+
+print(f"Loading webcodecs from: {addon_path}")
+print(f"Exists: {addon_path.exists()}")
+
+if not addon_path.exists():
+    print("Webcodecs addon not found. Run: npm install @napi-rs/webcodecs")
+    sys.exit(1)
+
+try:
+    webcodecs = load_addon(str(addon_path))
+    print(f"\nWebcodecs exports: {dir(webcodecs)}")
+
+    # Try to access some exports
+    print("\n=== Checking exports ===")
+    for name in dir(webcodecs):
+        try:
+            val = getattr(webcodecs, name)
+            print(f"  {name}: {type(val).__name__}")
+        except Exception as e:
+            print(f"  {name}: ERROR - {e}")
+
+except Exception as e:
+    print(f"\nError loading addon: {e}")
+    import traceback
+
+    traceback.print_exc()

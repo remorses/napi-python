@@ -209,3 +209,72 @@ pub async fn async_divide(a: i32, b: i32) -> napi::Result<i32> {
 pub async fn async_sum(numbers: Vec<i32>) -> i32 {
     numbers.iter().sum()
 }
+
+// =============================================================================
+// Buffer / ArrayBuffer / TypedArray
+// =============================================================================
+
+use napi::bindgen_prelude::*;
+
+/// Get the length of a buffer
+#[napi]
+pub fn buffer_length(buf: Buffer) -> u32 {
+    buf.len() as u32
+}
+
+/// Create a buffer with repeated byte value
+#[napi]
+pub fn create_buffer(size: u32, fill_value: u8) -> Buffer {
+    let data = vec![fill_value; size as usize];
+    Buffer::from(data)
+}
+
+/// Sum all bytes in a buffer
+#[napi]
+pub fn buffer_sum(buf: Buffer) -> u32 {
+    buf.iter().map(|&b| b as u32).sum()
+}
+
+/// Get a byte at specific index from buffer
+#[napi]
+pub fn buffer_get_byte(buf: Buffer, index: u32) -> Option<u8> {
+    buf.get(index as usize).copied()
+}
+
+/// Create a Uint8Array with sequential values
+#[napi]
+pub fn create_uint8_array(size: u32) -> Uint8Array {
+    let data: Vec<u8> = (0..size).map(|i| (i % 256) as u8).collect();
+    Uint8Array::new(data)
+}
+
+/// Get Uint8Array length
+#[napi]
+pub fn uint8_array_length(arr: Uint8Array) -> u32 {
+    arr.len() as u32
+}
+
+/// Sum all values in Uint8Array
+#[napi]
+pub fn uint8_array_sum(arr: Uint8Array) -> u32 {
+    arr.iter().map(|&b| b as u32).sum()
+}
+
+/// Create a Float64Array with values
+#[napi]
+pub fn create_float64_array(values: Vec<f64>) -> Float64Array {
+    Float64Array::new(values)
+}
+
+/// Sum Float64Array values
+#[napi]
+pub fn float64_array_sum(arr: Float64Array) -> f64 {
+    arr.iter().sum()
+}
+
+/// Double each value in a Uint8Array and return new array
+#[napi]
+pub fn double_uint8_array(arr: Uint8Array) -> Uint8Array {
+    let data: Vec<u8> = arr.iter().map(|&b| b.saturating_mul(2)).collect();
+    Uint8Array::new(data)
+}

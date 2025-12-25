@@ -164,6 +164,31 @@ typedef struct {
     napi_status (*wrap)(napi_env env, napi_value js_object, void* native_object, napi_finalize finalize_cb, void* finalize_hint, napi_ref* result);
     napi_status (*unwrap)(napi_env env, napi_value js_object, void** result);
     napi_status (*define_class_impl)(napi_env env, const char* utf8name, size_t length, napi_callback constructor, void* data, size_t property_count, const napi_property_descriptor* properties, napi_value* result);
+    // ArrayBuffer functions
+    napi_status (*create_arraybuffer)(napi_env env, size_t byte_length, void** data, napi_value* result);
+    napi_status (*get_arraybuffer_info)(napi_env env, napi_value arraybuffer, void** data, size_t* byte_length);
+    napi_status (*is_detached_arraybuffer)(napi_env env, napi_value arraybuffer, bool* result);
+    napi_status (*detach_arraybuffer)(napi_env env, napi_value arraybuffer);
+    napi_status (*is_arraybuffer)(napi_env env, napi_value value, bool* result);
+    // TypedArray functions
+    napi_status (*create_typedarray)(napi_env env, napi_typedarray_type type, size_t length, napi_value arraybuffer, size_t byte_offset, napi_value* result);
+    // DataView functions
+    napi_status (*create_dataview)(napi_env env, size_t byte_length, napi_value arraybuffer, size_t byte_offset, napi_value* result);
+    napi_status (*get_dataview_info)(napi_env env, napi_value dataview, size_t* byte_length, void** data, napi_value* arraybuffer, size_t* byte_offset);
+    napi_status (*is_dataview)(napi_env env, napi_value value, bool* result);
+    // Buffer functions
+    napi_status (*create_buffer)(napi_env env, size_t size, void** data, napi_value* result);
+    napi_status (*create_buffer_copy)(napi_env env, size_t length, const void* data, void** result_data, napi_value* result);
+    napi_status (*get_buffer_info)(napi_env env, napi_value buffer, void** data, size_t* length);
+    napi_status (*is_buffer)(napi_env env, napi_value value, bool* result);
+    // External functions
+    napi_status (*create_external)(napi_env env, void* data, napi_finalize finalize_cb, void* finalize_hint, napi_value* result);
+    napi_status (*get_value_external)(napi_env env, napi_value value, void** result);
+    // Additional error functions
+    napi_status (*throw_type_error)(napi_env env, const char* code, const char* msg);
+    napi_status (*throw_range_error)(napi_env env, const char* code, const char* msg);
+    napi_status (*create_type_error)(napi_env env, napi_value code, napi_value msg, napi_value* result);
+    napi_status (*create_range_error)(napi_env env, napi_value code, napi_value msg, napi_value* result);
 } NapiPythonFunctions;
 
 // Global function table
@@ -665,4 +690,179 @@ napi_status napi_object_freeze(napi_env env, napi_value object) {
 
 napi_status napi_object_seal(napi_env env, napi_value object) {
     return napi_ok;
+}
+
+// =============================================================================
+// ArrayBuffer Functions
+// =============================================================================
+
+napi_status napi_create_arraybuffer(napi_env env, size_t byte_length, void** data, napi_value* result) {
+    CHECK_FUNCS();
+    if (g_funcs->create_arraybuffer) return g_funcs->create_arraybuffer(env, byte_length, data, result);
+    return napi_generic_failure;
+}
+
+napi_status napi_get_arraybuffer_info(napi_env env, napi_value arraybuffer, void** data, size_t* byte_length) {
+    CHECK_FUNCS();
+    if (g_funcs->get_arraybuffer_info) return g_funcs->get_arraybuffer_info(env, arraybuffer, data, byte_length);
+    return napi_generic_failure;
+}
+
+napi_status napi_is_detached_arraybuffer(napi_env env, napi_value arraybuffer, bool* result) {
+    CHECK_FUNCS();
+    if (g_funcs->is_detached_arraybuffer) return g_funcs->is_detached_arraybuffer(env, arraybuffer, result);
+    if (result) *result = false;
+    return napi_ok;
+}
+
+napi_status napi_detach_arraybuffer(napi_env env, napi_value arraybuffer) {
+    CHECK_FUNCS();
+    if (g_funcs->detach_arraybuffer) return g_funcs->detach_arraybuffer(env, arraybuffer);
+    return napi_generic_failure;
+}
+
+napi_status napi_is_arraybuffer(napi_env env, napi_value value, bool* result) {
+    CHECK_FUNCS();
+    if (g_funcs->is_arraybuffer) return g_funcs->is_arraybuffer(env, value, result);
+    if (result) *result = false;
+    return napi_ok;
+}
+
+napi_status napi_create_external_arraybuffer(napi_env env, void* external_data, size_t byte_length, napi_finalize finalize_cb, void* finalize_hint, napi_value* result) {
+    // For now, create a regular arraybuffer and copy the data
+    // TODO: Implement proper external arraybuffer with finalize callback
+    CHECK_FUNCS();
+    if (g_funcs->create_arraybuffer) {
+        void* data = NULL;
+        napi_status status = g_funcs->create_arraybuffer(env, byte_length, &data, result);
+        if (status == napi_ok && data && external_data && byte_length > 0) {
+            // Copy external data to our buffer
+            for (size_t i = 0; i < byte_length; i++) {
+                ((unsigned char*)data)[i] = ((unsigned char*)external_data)[i];
+            }
+        }
+        return status;
+    }
+    return napi_generic_failure;
+}
+
+// =============================================================================
+// TypedArray Functions
+// =============================================================================
+
+napi_status napi_create_typedarray(napi_env env, napi_typedarray_type type, size_t length, napi_value arraybuffer, size_t byte_offset, napi_value* result) {
+    CHECK_FUNCS();
+    if (g_funcs->create_typedarray) return g_funcs->create_typedarray(env, type, length, arraybuffer, byte_offset, result);
+    return napi_generic_failure;
+}
+
+// =============================================================================
+// DataView Functions
+// =============================================================================
+
+napi_status napi_create_dataview(napi_env env, size_t byte_length, napi_value arraybuffer, size_t byte_offset, napi_value* result) {
+    CHECK_FUNCS();
+    if (g_funcs->create_dataview) return g_funcs->create_dataview(env, byte_length, arraybuffer, byte_offset, result);
+    return napi_generic_failure;
+}
+
+napi_status napi_get_dataview_info(napi_env env, napi_value dataview, size_t* byte_length, void** data, napi_value* arraybuffer, size_t* byte_offset) {
+    CHECK_FUNCS();
+    if (g_funcs->get_dataview_info) return g_funcs->get_dataview_info(env, dataview, byte_length, data, arraybuffer, byte_offset);
+    return napi_generic_failure;
+}
+
+napi_status napi_is_dataview(napi_env env, napi_value value, bool* result) {
+    CHECK_FUNCS();
+    if (g_funcs->is_dataview) return g_funcs->is_dataview(env, value, result);
+    if (result) *result = false;
+    return napi_ok;
+}
+
+// =============================================================================
+// Buffer Functions
+// =============================================================================
+
+napi_status napi_create_buffer(napi_env env, size_t size, void** data, napi_value* result) {
+    CHECK_FUNCS();
+    if (g_funcs->create_buffer) return g_funcs->create_buffer(env, size, data, result);
+    return napi_generic_failure;
+}
+
+napi_status napi_create_buffer_copy(napi_env env, size_t length, const void* data, void** result_data, napi_value* result) {
+    CHECK_FUNCS();
+    if (g_funcs->create_buffer_copy) return g_funcs->create_buffer_copy(env, length, data, result_data, result);
+    return napi_generic_failure;
+}
+
+napi_status napi_get_buffer_info(napi_env env, napi_value buffer, void** data, size_t* length) {
+    CHECK_FUNCS();
+    if (g_funcs->get_buffer_info) return g_funcs->get_buffer_info(env, buffer, data, length);
+    return napi_generic_failure;
+}
+
+napi_status napi_is_buffer(napi_env env, napi_value value, bool* result) {
+    CHECK_FUNCS();
+    if (g_funcs->is_buffer) return g_funcs->is_buffer(env, value, result);
+    if (result) *result = false;
+    return napi_ok;
+}
+
+napi_status napi_create_external_buffer(napi_env env, size_t length, void* data, napi_finalize finalize_cb, void* finalize_hint, napi_value* result) {
+    // For now, create a buffer copy
+    CHECK_FUNCS();
+    if (g_funcs->create_buffer_copy) {
+        return g_funcs->create_buffer_copy(env, length, data, NULL, result);
+    }
+    return napi_generic_failure;
+}
+
+napi_status napi_adjust_external_memory(napi_env env, int64_t change_in_bytes, int64_t* adjusted_value) {
+    // No-op for Python - we don't need to adjust GC pressure
+    if (adjusted_value) *adjusted_value = 0;
+    return napi_ok;
+}
+
+// =============================================================================
+// External Functions
+// =============================================================================
+
+napi_status napi_create_external(napi_env env, void* data, napi_finalize finalize_cb, void* finalize_hint, napi_value* result) {
+    CHECK_FUNCS();
+    if (g_funcs->create_external) return g_funcs->create_external(env, data, finalize_cb, finalize_hint, result);
+    return napi_generic_failure;
+}
+
+napi_status napi_get_value_external(napi_env env, napi_value value, void** result) {
+    CHECK_FUNCS();
+    if (g_funcs->get_value_external) return g_funcs->get_value_external(env, value, result);
+    return napi_generic_failure;
+}
+
+// =============================================================================
+// Additional Error Functions
+// =============================================================================
+
+napi_status napi_throw_type_error(napi_env env, const char* code, const char* msg) {
+    CHECK_FUNCS();
+    if (g_funcs->throw_type_error) return g_funcs->throw_type_error(env, code, msg);
+    return napi_generic_failure;
+}
+
+napi_status napi_throw_range_error(napi_env env, const char* code, const char* msg) {
+    CHECK_FUNCS();
+    if (g_funcs->throw_range_error) return g_funcs->throw_range_error(env, code, msg);
+    return napi_generic_failure;
+}
+
+napi_status napi_create_type_error(napi_env env, napi_value code, napi_value msg, napi_value* result) {
+    CHECK_FUNCS();
+    if (g_funcs->create_type_error) return g_funcs->create_type_error(env, code, msg, result);
+    return napi_generic_failure;
+}
+
+napi_status napi_create_range_error(napi_env env, napi_value code, napi_value msg, napi_value* result) {
+    CHECK_FUNCS();
+    if (g_funcs->create_range_error) return g_funcs->create_range_error(env, code, msg, result);
+    return napi_generic_failure;
 }

@@ -40,3 +40,6 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+*.node
+*.dylib

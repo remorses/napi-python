@@ -2,53 +2,57 @@
 
 Load Node-API (.node) native addons in Python.
 
-## Goal
-
-Run native addons built with napi-rs, node-addon-api, or raw N-API directly in Python without Node.js.
-
-## How it works
-
-1. A C shim library exports all NAPI symbols
-2. Python implements the NAPI functions via ctypes
-3. When a .node file loads, it resolves symbols from our shim
-4. Native callbacks get wrapped as Python callables
-
 ## Usage
 
 ```python
 from napi_python import load_addon
 
-# Load addon
 addon = load_addon("path/to/addon.node")
 
-# Call functions
-result = addon.add(1, 2)
-
-# Use classes
-counter = addon.Counter(10)
+result = addon.add(1, 2)           # Call functions
+counter = addon.Counter(10)         # Use classes
 counter.increment()
-print(counter.value)  # 11
 
-# Async with asyncio
-import asyncio
-result = await addon.asyncAdd(1, 2)
+result = await addon.asyncAdd(1, 2) # Async with asyncio
+```
+
+## How it works
+
+```
+Native Addon (.node)
+        │
+        ▼
+┌───────────────────┐
+│   C Shim          │  ← Exports NAPI symbols
+│   libnapi_shim    │
+└───────────────────┘
+        │
+        ▼ (function pointers)
+┌───────────────────┐
+│  Python Runtime   │  ← Implements NAPI via ctypes
+│  _loader.py       │
+└───────────────────┘
+        │
+        ▼
+┌───────────────────┐
+│  Handle Store     │  ← Maps int handles → Python objects
+│  Context/Env      │
+└───────────────────┘
 ```
 
 ## Status
 
-Working features:
-- Simple functions (numbers, strings, arrays)
-- Callbacks (Python lambdas work as native callbacks)
+**Working:**
+- Functions (numbers, strings, arrays)
+- Callbacks (Python lambdas as native callbacks)
 - Classes (constructor, methods, getters/setters)
-- Promises/async (returns asyncio.Future, works with await)
-- Threadsafe functions (cross-thread callbacks)
+- Promises/async (asyncio.Future integration)
+- Threadsafe functions
 
 ## TODO
 
-See IMPLEMENTATION_PLAN.md for full details.
-
-### Priority 1 - Bug Fixes
-- [x] Fix string argument truncation
+### Priority 1 - Performance
+- [ ] Implement hot path NAPI functions in C (eliminate ctypes overhead)
 
 ### Priority 2 - Error Handling
 - [ ] napi_throw, napi_throw_error, napi_throw_type_error

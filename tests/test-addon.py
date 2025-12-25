@@ -98,6 +98,68 @@ counter.reset()
 print(f"After reset(): {counter.value}")
 assert counter.value == 0, f"Expected 0, got {counter.value}"
 
+# Test Buffer/TypedArray functions
+print("\n=== Buffers ===")
+
+# Test buffer_length - if function exists
+if hasattr(addon, "bufferLength"):
+    # Create a bytes object to pass as buffer
+    test_bytes = bytes([1, 2, 3, 4, 5])
+    result = addon.bufferLength(test_bytes)
+    print(f"bufferLength(bytes[5]) = {result}")
+    assert result == 5, f"Expected 5, got {result}"
+
+    # Test create_buffer
+    result = addon.createBuffer(10, 42)
+    print(
+        f"createBuffer(10, 42) = {type(result).__name__}, len={len(result) if hasattr(result, '__len__') else 'N/A'}"
+    )
+
+    # Test buffer_sum
+    test_bytes = bytes([1, 2, 3, 4, 5])
+    result = addon.bufferSum(test_bytes)
+    print(f"bufferSum([1,2,3,4,5]) = {result}")
+    assert result == 15, f"Expected 15, got {result}"
+
+    # Test buffer_get_byte
+    test_bytes = bytes([10, 20, 30, 40, 50])
+    result = addon.bufferGetByte(test_bytes, 2)
+    print(f"bufferGetByte([10,20,30,40,50], 2) = {result}")
+    assert result == 30, f"Expected 30, got {result}"
+
+    print("Buffer tests passed!")
+else:
+    print("Buffer functions not available (rebuild test-addon to add them)")
+
+# Test TypedArray functions
+print("\n=== TypedArrays ===")
+
+if hasattr(addon, "createUint8Array"):
+    # Test create_uint8_array
+    result = addon.createUint8Array(5)
+    print(f"createUint8Array(5) = {type(result).__name__}")
+
+    # Test uint8_array_length
+    test_bytes = bytes([1, 2, 3, 4, 5])
+    result = addon.uint8ArrayLength(test_bytes)
+    print(f"uint8ArrayLength(bytes[5]) = {result}")
+    assert result == 5, f"Expected 5, got {result}"
+
+    # Test uint8_array_sum
+    test_bytes = bytes([1, 2, 3, 4, 5])
+    result = addon.uint8ArraySum(test_bytes)
+    print(f"uint8ArraySum([1,2,3,4,5]) = {result}")
+    assert result == 15, f"Expected 15, got {result}"
+
+    # Test double_uint8_array
+    test_bytes = bytes([1, 2, 3, 4, 5])
+    result = addon.doubleUint8Array(test_bytes)
+    print(f"doubleUint8Array([1,2,3,4,5]) = {type(result).__name__}")
+
+    print("TypedArray tests passed!")
+else:
+    print("TypedArray functions not available (rebuild test-addon to add them)")
+
 print("\n=== Summary ===")
 print("Working:")
 print("  - Simple functions (add, getMagicNumber)")
@@ -107,6 +169,8 @@ print("  - Callbacks (callWithValue, mapAndSum)")
 print("  - Optional values (maybeDouble, greetOptional)")
 print("  - Division")
 print("  - Classes (Counter with methods and properties)")
+print("  - Buffers (if available)")
+print("  - TypedArrays (if available)")
 print("")
 print("Known issues:")
 print("  - Error throwing not yet implemented")

@@ -13,6 +13,7 @@
   "author": "remorses",
   "license": "ISC",
   "dependencies": {
+    "@napi-rs/webcodecs": "^1.2.0",
     "@node-rs/crc32": "^1.10.6"
   }
 }

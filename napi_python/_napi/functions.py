@@ -23,11 +23,13 @@ from ctypes import (
     create_string_buffer,
     addressof,
     string_at,
+    memmove,
 )
 
 from .types import (
     napi_status,
     napi_valuetype,
+    napi_typedarray_type,
     napi_property_attributes,
     napi_env,
     napi_value,
@@ -47,6 +49,17 @@ from .._runtime.context import Context, get_default_context
 from .._runtime.env import Env
 from .._runtime.handle import Undefined
 from .._runtime.handle_scope import HandleScope, CallbackInfo
+from .._values.arraybuffer import (
+    ArrayBuffer,
+    TypedArray,
+    DataView,
+    RangeError,
+    TYPED_ARRAY_INFO,
+    TYPED_ARRAY_NAMES,
+    is_arraybuffer,
+    is_typedarray,
+    is_dataview,
+)
 
 
 # Global context (initialized on first use)
@@ -246,7 +259,7 @@ def napi_is_arraybuffer(env: int, value: int, result: POINTER(c_bool)) -> int:
         return env_obj.set_last_error(napi_status.napi_invalid_arg)
 
     py_value = _get_ctx().python_value_from_napi(value)
-    result[0] = isinstance(py_value, (bytearray, memoryview))
+    result[0] = is_arraybuffer(py_value)
     return env_obj.clear_last_error()
 
 
@@ -260,7 +273,36 @@ def napi_is_buffer(env: int, value: int, result: POINTER(c_bool)) -> int:
         return env_obj.set_last_error(napi_status.napi_invalid_arg)
 
     py_value = _get_ctx().python_value_from_napi(value)
-    result[0] = isinstance(py_value, (bytes, bytearray))
+    # Buffer is a TypedArray (Uint8Array) or raw bytes
+    result[0] = isinstance(py_value, (bytes, bytearray, TypedArray))
+    return env_obj.clear_last_error()
+
+
+def napi_is_typedarray(env: int, value: int, result: POINTER(c_bool)) -> int:
+    """Check if value is a TypedArray."""
+    env_obj = _check_env(env)
+    if not env_obj:
+        return napi_status.napi_invalid_arg
+
+    if not result:
+        return env_obj.set_last_error(napi_status.napi_invalid_arg)
+
+    py_value = _get_ctx().python_value_from_napi(value)
+    result[0] = is_typedarray(py_value)
+    return env_obj.clear_last_error()
+
+
+def napi_is_dataview(env: int, value: int, result: POINTER(c_bool)) -> int:
+    """Check if value is a DataView."""
+    env_obj = _check_env(env)
+    if not env_obj:
+        return napi_status.napi_invalid_arg
+
+    if not result:
+        return env_obj.set_last_error(napi_status.napi_invalid_arg)
+
+    py_value = _get_ctx().python_value_from_napi(value)
+    result[0] = is_dataview(py_value)
     return env_obj.clear_last_error()
 
 
@@ -866,6 +908,595 @@ def napi_get_cb_info(
     if data:
         data[0] = cb_info.data
 
+    return env_obj.clear_last_error()
+
+
+# =============================================================================
+# ArrayBuffer Operations
+# =============================================================================
+
+
+def napi_create_arraybuffer(
+    env: int, byte_length: int, data: POINTER(c_void_p), result: POINTER(napi_value)
+) -> int:
+    """Create an ArrayBuffer."""
+    env_obj = _check_env(env)
+    if not env_obj:
+        return napi_status.napi_invalid_arg
+
+    if not result:
+        return env_obj.set_last_error(napi_status.napi_invalid_arg)
+
+    try:
+        # Create ArrayBuffer
+        arraybuffer = ArrayBuffer(byte_length)
+
+        # If data pointer is requested, return it
+        if data:
+            data[0] = arraybuffer.data_ptr
+
+        # Add to handle store
+        handle = _get_ctx().add_value(arraybuffer)
+        result[0] = handle
+        return env_obj.clear_last_error()
+
+    except Exception as e:
+        env_obj.last_exception = e
+        return env_obj.set_last_error(napi_status.napi_generic_failure)
+
+
+def napi_get_arraybuffer_info(
+    env: int,
+    arraybuffer: int,
+    data: POINTER(c_void_p),
+    byte_length: POINTER(c_size_t),
+) -> int:
+    """Get ArrayBuffer information."""
+    env_obj = _check_env(env)
+    if not env_obj:
+        return napi_status.napi_invalid_arg
+
+    py_value = _get_ctx().python_value_from_napi(arraybuffer)
+
+    if not is_arraybuffer(py_value):
+        return env_obj.set_last_error(napi_status.napi_invalid_arg)
+
+    if data:
+        data[0] = py_value.data_ptr
+
+    if byte_length:
+        byte_length[0] = py_value.byte_length
+
+    return env_obj.clear_last_error()
+
+
+def napi_is_detached_arraybuffer(
+    env: int, arraybuffer: int, result: POINTER(c_bool)
+) -> int:
+    """Check if ArrayBuffer is detached."""
+    env_obj = _check_env(env)
+    if not env_obj:
+        return napi_status.napi_invalid_arg
+
+    if not result:
+        return env_obj.set_last_error(napi_status.napi_invalid_arg)
+
+    py_value = _get_ctx().python_value_from_napi(arraybuffer)
+
+    if is_arraybuffer(py_value):
+        result[0] = py_value.detached
+    else:
+        result[0] = False
+
+    return env_obj.clear_last_error()
+
+
+def napi_detach_arraybuffer(env: int, arraybuffer: int) -> int:
+    """Detach an ArrayBuffer."""
+    env_obj = _check_env(env)
+    if not env_obj:
+        return napi_status.napi_invalid_arg
+
+    py_value = _get_ctx().python_value_from_napi(arraybuffer)
+
+    if not is_arraybuffer(py_value):
+        return env_obj.set_last_error(napi_status.napi_arraybuffer_expected)
+
+    try:
+        py_value.detach()
+        return env_obj.clear_last_error()
+    except Exception:
+        return env_obj.set_last_error(napi_status.napi_generic_failure)
+
+
+# =============================================================================
+# TypedArray Operations
+# =============================================================================
+
+
+def napi_create_typedarray(
+    env: int,
+    array_type: int,
+    length: int,
+    arraybuffer: int,
+    byte_offset: int,
+    result: POINTER(napi_value),
+) -> int:
+    """Create a TypedArray."""
+    env_obj = _check_env(env)
+    if not env_obj:
+        return napi_status.napi_invalid_arg
+
+    if not result:
+        return env_obj.set_last_error(napi_status.napi_invalid_arg)
+
+    buffer = _get_ctx().python_value_from_napi(arraybuffer)
+
+    if not is_arraybuffer(buffer):
+        return env_obj.set_last_error(napi_status.napi_invalid_arg)
+
+    if array_type not in TYPED_ARRAY_INFO:
+        return env_obj.set_last_error(napi_status.napi_invalid_arg)
+
+    try:
+        typedarray = TypedArray(array_type, buffer, byte_offset, length)
+        handle = _get_ctx().add_value(typedarray)
+        result[0] = handle
+        return env_obj.clear_last_error()
+
+    except RangeError as e:
+        env_obj.last_exception = e
+        return env_obj.set_last_error(napi_status.napi_generic_failure)
+
+    except Exception as e:
+        env_obj.last_exception = e
+        return env_obj.set_last_error(napi_status.napi_generic_failure)
+
+
+def napi_get_typedarray_info(
+    env: int,
+    typedarray: int,
+    array_type: POINTER(c_int32),
+    length: POINTER(c_size_t),
+    data: POINTER(c_void_p),
+    arraybuffer: POINTER(napi_value),
+    byte_offset: POINTER(c_size_t),
+) -> int:
+    """Get TypedArray information."""
+    env_obj = _check_env(env)
+    if not env_obj:
+        return napi_status.napi_invalid_arg
+
+    py_value = _get_ctx().python_value_from_napi(typedarray)
+
+    if not is_typedarray(py_value) and not is_dataview(py_value):
+        return env_obj.set_last_error(napi_status.napi_invalid_arg)
+
+    if array_type:
+        if is_typedarray(py_value):
+            array_type[0] = py_value.array_type
+        else:
+            # DataView doesn't have an array type, return failure
+            return env_obj.set_last_error(napi_status.napi_generic_failure)
+
+    if length:
+        if is_typedarray(py_value):
+            length[0] = py_value.length
+        else:
+            length[0] = py_value.byte_length
+
+    if data:
+        data[0] = py_value.data_ptr
+
+    if arraybuffer:
+        buffer_handle = _get_ctx().add_value(py_value.buffer)
+        arraybuffer[0] = buffer_handle
+
+    if byte_offset:
+        byte_offset[0] = py_value.byte_offset
+
+    return env_obj.clear_last_error()
+
+
+# =============================================================================
+# DataView Operations
+# =============================================================================
+
+
+def napi_create_dataview(
+    env: int,
+    byte_length: int,
+    arraybuffer: int,
+    byte_offset: int,
+    result: POINTER(napi_value),
+) -> int:
+    """Create a DataView."""
+    env_obj = _check_env(env)
+    if not env_obj:
+        return napi_status.napi_invalid_arg
+
+    if not result:
+        return env_obj.set_last_error(napi_status.napi_invalid_arg)
+
+    buffer = _get_ctx().python_value_from_napi(arraybuffer)
+
+    if not is_arraybuffer(buffer):
+        return env_obj.set_last_error(napi_status.napi_invalid_arg)
+
+    try:
+        dataview = DataView(buffer, byte_offset, byte_length)
+        handle = _get_ctx().add_value(dataview)
+        result[0] = handle
+        return env_obj.clear_last_error()
+
+    except RangeError as e:
+        env_obj.last_exception = e
+        return env_obj.set_last_error(napi_status.napi_generic_failure)
+
+    except Exception as e:
+        env_obj.last_exception = e
+        return env_obj.set_last_error(napi_status.napi_generic_failure)
+
+
+def napi_get_dataview_info(
+    env: int,
+    dataview: int,
+    byte_length: POINTER(c_size_t),
+    data: POINTER(c_void_p),
+    arraybuffer: POINTER(napi_value),
+    byte_offset: POINTER(c_size_t),
+) -> int:
+    """Get DataView information."""
+    env_obj = _check_env(env)
+    if not env_obj:
+        return napi_status.napi_invalid_arg
+
+    py_value = _get_ctx().python_value_from_napi(dataview)
+
+    if not is_dataview(py_value):
+        return env_obj.set_last_error(napi_status.napi_invalid_arg)
+
+    if byte_length:
+        byte_length[0] = py_value.byte_length
+
+    if data:
+        data[0] = py_value.data_ptr
+
+    if arraybuffer:
+        buffer_handle = _get_ctx().add_value(py_value.buffer)
+        arraybuffer[0] = buffer_handle
+
+    if byte_offset:
+        byte_offset[0] = py_value.byte_offset
+
+    return env_obj.clear_last_error()
+
+
+# =============================================================================
+# Buffer Operations (Node.js specific)
+# =============================================================================
+
+
+def napi_create_buffer(
+    env: int, size: int, data: POINTER(c_void_p), result: POINTER(napi_value)
+) -> int:
+    """Create a Node.js Buffer (backed by ArrayBuffer + Uint8Array)."""
+    env_obj = _check_env(env)
+    if not env_obj:
+        return napi_status.napi_invalid_arg
+
+    if not result:
+        return env_obj.set_last_error(napi_status.napi_invalid_arg)
+
+    try:
+        # Create an ArrayBuffer and wrap it as a Uint8Array
+        arraybuffer = ArrayBuffer(size)
+        buffer = TypedArray(napi_typedarray_type.napi_uint8_array, arraybuffer, 0, size)
+
+        if data:
+            data[0] = arraybuffer.data_ptr
+
+        handle = _get_ctx().add_value(buffer)
+        result[0] = handle
+        return env_obj.clear_last_error()
+
+    except Exception as e:
+        env_obj.last_exception = e
+        return env_obj.set_last_error(napi_status.napi_generic_failure)
+
+
+def napi_create_buffer_copy(
+    env: int,
+    length: int,
+    data: c_void_p,
+    result_data: POINTER(c_void_p),
+    result: POINTER(napi_value),
+) -> int:
+    """Create a Node.js Buffer by copying data."""
+    env_obj = _check_env(env)
+    if not env_obj:
+        return napi_status.napi_invalid_arg
+
+    if not result:
+        return env_obj.set_last_error(napi_status.napi_invalid_arg)
+
+    try:
+        # Create ArrayBuffer and copy data
+        arraybuffer = ArrayBuffer(length)
+
+        if data and length > 0:
+            # Copy from source pointer to our buffer
+            memmove(arraybuffer.data_ptr, data, length)
+
+        buffer = TypedArray(
+            napi_typedarray_type.napi_uint8_array, arraybuffer, 0, length
+        )
+
+        if result_data:
+            result_data[0] = arraybuffer.data_ptr
+
+        handle = _get_ctx().add_value(buffer)
+        result[0] = handle
+        return env_obj.clear_last_error()
+
+    except Exception as e:
+        env_obj.last_exception = e
+        return env_obj.set_last_error(napi_status.napi_generic_failure)
+
+
+def napi_get_buffer_info(
+    env: int, buffer: int, data: POINTER(c_void_p), length: POINTER(c_size_t)
+) -> int:
+    """Get Buffer information."""
+    env_obj = _check_env(env)
+    if not env_obj:
+        return napi_status.napi_invalid_arg
+
+    py_value = _get_ctx().python_value_from_napi(buffer)
+
+    # Handle TypedArray (Uint8Array buffer)
+    if is_typedarray(py_value):
+        if data:
+            data[0] = py_value.data_ptr
+        if length:
+            length[0] = py_value.length
+        return env_obj.clear_last_error()
+
+    # Handle DataView
+    if is_dataview(py_value):
+        if data:
+            data[0] = py_value.data_ptr
+        if length:
+            length[0] = py_value.byte_length
+        return env_obj.clear_last_error()
+
+    return env_obj.set_last_error(napi_status.napi_invalid_arg)
+
+
+# =============================================================================
+# External Value Operations
+# =============================================================================
+
+
+def napi_create_external(
+    env: int,
+    data: int,
+    finalize_cb: int,
+    finalize_hint: int,
+    result: POINTER(napi_value),
+) -> int:
+    """Create an external value."""
+    env_obj = _check_env(env)
+    if not env_obj:
+        return napi_status.napi_invalid_arg
+
+    if not result:
+        return env_obj.set_last_error(napi_status.napi_invalid_arg)
+
+    external = _get_ctx().create_external(data)
+
+    # TODO: Handle finalizer callback
+
+    handle = _get_ctx().add_value(external)
+    result[0] = handle
+    return env_obj.clear_last_error()
+
+
+def napi_get_value_external(env: int, value: int, result: POINTER(c_void_p)) -> int:
+    """Get external value data."""
+    env_obj = _check_env(env)
+    if not env_obj:
+        return napi_status.napi_invalid_arg
+
+    if not result:
+        return env_obj.set_last_error(napi_status.napi_invalid_arg)
+
+    py_value = _get_ctx().python_value_from_napi(value)
+
+    if not _get_ctx().is_external(py_value):
+        return env_obj.set_last_error(napi_status.napi_invalid_arg)
+
+    result[0] = _get_ctx().get_external_value(py_value)
+    return env_obj.clear_last_error()
+
+
+# =============================================================================
+# Error Handling
+# =============================================================================
+
+
+def napi_throw(env: int, error: int) -> int:
+    """Throw an exception."""
+    env_obj = _check_env(env)
+    if not env_obj:
+        return napi_status.napi_invalid_arg
+
+    py_error = _get_ctx().python_value_from_napi(error)
+    env_obj.last_exception = py_error
+    return env_obj.clear_last_error()
+
+
+def napi_throw_error(env: int, code: bytes, msg: bytes) -> int:
+    """Throw an Error with message."""
+    env_obj = _check_env(env)
+    if not env_obj:
+        return napi_status.napi_invalid_arg
+
+    msg_str = msg.decode("utf-8") if isinstance(msg, bytes) else str(msg)
+    error = Exception(msg_str)
+
+    if code:
+        code_str = code.decode("utf-8") if isinstance(code, bytes) else str(code)
+        error.code = code_str
+
+    env_obj.last_exception = error
+    return env_obj.clear_last_error()
+
+
+def napi_throw_type_error(env: int, code: bytes, msg: bytes) -> int:
+    """Throw a TypeError with message."""
+    env_obj = _check_env(env)
+    if not env_obj:
+        return napi_status.napi_invalid_arg
+
+    msg_str = msg.decode("utf-8") if isinstance(msg, bytes) else str(msg)
+    error = TypeError(msg_str)
+
+    if code:
+        code_str = code.decode("utf-8") if isinstance(code, bytes) else str(code)
+        error.code = code_str
+
+    env_obj.last_exception = error
+    return env_obj.clear_last_error()
+
+
+def napi_throw_range_error(env: int, code: bytes, msg: bytes) -> int:
+    """Throw a RangeError with message."""
+    env_obj = _check_env(env)
+    if not env_obj:
+        return napi_status.napi_invalid_arg
+
+    msg_str = msg.decode("utf-8") if isinstance(msg, bytes) else str(msg)
+    error = ValueError(msg_str)  # Python uses ValueError for range errors
+
+    if code:
+        code_str = code.decode("utf-8") if isinstance(code, bytes) else str(code)
+        error.code = code_str
+
+    env_obj.last_exception = error
+    return env_obj.clear_last_error()
+
+
+def napi_is_exception_pending(env: int, result: POINTER(c_bool)) -> int:
+    """Check if an exception is pending."""
+    env_obj = _check_env(env)
+    if not env_obj:
+        return napi_status.napi_invalid_arg
+
+    if not result:
+        return env_obj.set_last_error(napi_status.napi_invalid_arg)
+
+    result[0] = env_obj.last_exception is not None
+    return env_obj.clear_last_error()
+
+
+def napi_get_and_clear_last_exception(env: int, result: POINTER(napi_value)) -> int:
+    """Get and clear the last exception."""
+    env_obj = _check_env(env)
+    if not env_obj:
+        return napi_status.napi_invalid_arg
+
+    if not result:
+        return env_obj.set_last_error(napi_status.napi_invalid_arg)
+
+    if env_obj.last_exception is None:
+        result[0] = Constant.UNDEFINED
+    else:
+        handle = _get_ctx().add_value(env_obj.last_exception)
+        result[0] = handle
+        env_obj.last_exception = None
+
+    return env_obj.clear_last_error()
+
+
+def napi_create_error(
+    env: int, code: int, msg: int, result: POINTER(napi_value)
+) -> int:
+    """Create an Error object."""
+    env_obj = _check_env(env)
+    if not env_obj:
+        return napi_status.napi_invalid_arg
+
+    if not result:
+        return env_obj.set_last_error(napi_status.napi_invalid_arg)
+
+    msg_value = _get_ctx().python_value_from_napi(msg)
+    if not isinstance(msg_value, str):
+        return env_obj.set_last_error(napi_status.napi_string_expected)
+
+    error = Exception(msg_value)
+
+    if code:
+        code_value = _get_ctx().python_value_from_napi(code)
+        if isinstance(code_value, str):
+            error.code = code_value
+
+    handle = _get_ctx().add_value(error)
+    result[0] = handle
+    return env_obj.clear_last_error()
+
+
+def napi_create_type_error(
+    env: int, code: int, msg: int, result: POINTER(napi_value)
+) -> int:
+    """Create a TypeError object."""
+    env_obj = _check_env(env)
+    if not env_obj:
+        return napi_status.napi_invalid_arg
+
+    if not result:
+        return env_obj.set_last_error(napi_status.napi_invalid_arg)
+
+    msg_value = _get_ctx().python_value_from_napi(msg)
+    if not isinstance(msg_value, str):
+        return env_obj.set_last_error(napi_status.napi_string_expected)
+
+    error = TypeError(msg_value)
+
+    if code:
+        code_value = _get_ctx().python_value_from_napi(code)
+        if isinstance(code_value, str):
+            error.code = code_value
+
+    handle = _get_ctx().add_value(error)
+    result[0] = handle
+    return env_obj.clear_last_error()
+
+
+def napi_create_range_error(
+    env: int, code: int, msg: int, result: POINTER(napi_value)
+) -> int:
+    """Create a RangeError object."""
+    env_obj = _check_env(env)
+    if not env_obj:
+        return napi_status.napi_invalid_arg
+
+    if not result:
+        return env_obj.set_last_error(napi_status.napi_invalid_arg)
+
+    msg_value = _get_ctx().python_value_from_napi(msg)
+    if not isinstance(msg_value, str):
+        return env_obj.set_last_error(napi_status.napi_string_expected)
+
+    error = ValueError(msg_value)  # Python uses ValueError
+
+    if code:
+        code_value = _get_ctx().python_value_from_napi(code)
+        if isinstance(code_value, str):
+            error.code = code_value
+
+    handle = _get_ctx().add_value(error)
+    result[0] = handle
     return env_obj.clear_last_error()
 
 

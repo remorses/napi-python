@@ -201,6 +201,55 @@ FuncDefineClassImpl = CFUNCTYPE(
     c_void_p,
     POINTER(c_void_p),
 )
+# ArrayBuffer functions
+FuncCreateArraybuffer = CFUNCTYPE(
+    c_int, c_void_p, c_size_t, POINTER(c_void_p), POINTER(c_void_p)
+)
+FuncGetArraybufferInfo = CFUNCTYPE(
+    c_int, c_void_p, c_void_p, POINTER(c_void_p), POINTER(c_size_t)
+)
+FuncIsDetachedArraybuffer = CFUNCTYPE(c_int, c_void_p, c_void_p, POINTER(c_bool))
+FuncDetachArraybuffer = CFUNCTYPE(c_int, c_void_p, c_void_p)
+FuncIsArraybuffer = CFUNCTYPE(c_int, c_void_p, c_void_p, POINTER(c_bool))
+# TypedArray functions
+FuncCreateTypedarray = CFUNCTYPE(
+    c_int, c_void_p, c_int, c_size_t, c_void_p, c_size_t, POINTER(c_void_p)
+)
+# DataView functions
+FuncCreateDataview = CFUNCTYPE(
+    c_int, c_void_p, c_size_t, c_void_p, c_size_t, POINTER(c_void_p)
+)
+FuncGetDataviewInfo = CFUNCTYPE(
+    c_int,
+    c_void_p,
+    c_void_p,
+    POINTER(c_size_t),
+    POINTER(c_void_p),
+    POINTER(c_void_p),
+    POINTER(c_size_t),
+)
+FuncIsDataview = CFUNCTYPE(c_int, c_void_p, c_void_p, POINTER(c_bool))
+# Buffer functions
+FuncCreateBuffer = CFUNCTYPE(
+    c_int, c_void_p, c_size_t, POINTER(c_void_p), POINTER(c_void_p)
+)
+FuncCreateBufferCopy = CFUNCTYPE(
+    c_int, c_void_p, c_size_t, c_void_p, POINTER(c_void_p), POINTER(c_void_p)
+)
+FuncGetBufferInfo = CFUNCTYPE(
+    c_int, c_void_p, c_void_p, POINTER(c_void_p), POINTER(c_size_t)
+)
+FuncIsBuffer = CFUNCTYPE(c_int, c_void_p, c_void_p, POINTER(c_bool))
+# External functions
+FuncCreateExternal = CFUNCTYPE(
+    c_int, c_void_p, c_void_p, c_void_p, c_void_p, POINTER(c_void_p)
+)
+FuncGetValueExternal = CFUNCTYPE(c_int, c_void_p, c_void_p, POINTER(c_void_p))
+# Additional error functions
+FuncThrowTypeError = CFUNCTYPE(c_int, c_void_p, c_char_p, c_char_p)
+FuncThrowRangeError = CFUNCTYPE(c_int, c_void_p, c_char_p, c_char_p)
+FuncCreateTypeError = CFUNCTYPE(c_int, c_void_p, c_void_p, c_void_p, POINTER(c_void_p))
+FuncCreateRangeError = CFUNCTYPE(c_int, c_void_p, c_void_p, c_void_p, POINTER(c_void_p))
 
 
 # Property descriptor structure (matches C struct)
@@ -279,6 +328,31 @@ class NapiPythonFunctions(Structure):
         ("wrap", FuncWrap),
         ("unwrap", FuncUnwrap),
         ("define_class_impl", FuncDefineClassImpl),
+        # ArrayBuffer functions
+        ("create_arraybuffer", FuncCreateArraybuffer),
+        ("get_arraybuffer_info", FuncGetArraybufferInfo),
+        ("is_detached_arraybuffer", FuncIsDetachedArraybuffer),
+        ("detach_arraybuffer", FuncDetachArraybuffer),
+        ("is_arraybuffer", FuncIsArraybuffer),
+        # TypedArray functions
+        ("create_typedarray", FuncCreateTypedarray),
+        # DataView functions
+        ("create_dataview", FuncCreateDataview),
+        ("get_dataview_info", FuncGetDataviewInfo),
+        ("is_dataview", FuncIsDataview),
+        # Buffer functions
+        ("create_buffer", FuncCreateBuffer),
+        ("create_buffer_copy", FuncCreateBufferCopy),
+        ("get_buffer_info", FuncGetBufferInfo),
+        ("is_buffer", FuncIsBuffer),
+        # External functions
+        ("create_external", FuncCreateExternal),
+        ("get_value_external", FuncGetValueExternal),
+        # Additional error functions
+        ("throw_type_error", FuncThrowTypeError),
+        ("throw_range_error", FuncThrowRangeError),
+        ("create_type_error", FuncCreateTypeError),
+        ("create_range_error", FuncCreateRangeError),
     ]
 
 
@@ -480,9 +554,13 @@ def _create_function_table() -> NapiPythonFunctions:
 
     @FuncIsTypedarray
     def is_typedarray(env, value, result):
+        from ._values.arraybuffer import TypedArray, is_typedarray as _is_typedarray
+
         py_val = ctx.python_value_from_napi(value)
-        # Treat bytes and bytearray as TypedArray (Uint8Array equivalent)
-        result[0] = isinstance(py_val, (bytes, bytearray, memoryview))
+        # Check for our TypedArray class or bytes/bytearray
+        result[0] = _is_typedarray(py_val) or isinstance(
+            py_val, (bytes, bytearray, memoryview)
+        )
         return napi_status.napi_ok
 
     @FuncIsError
@@ -768,10 +846,44 @@ def _create_function_table() -> NapiPythonFunctions:
     def get_typedarray_info(
         env, typedarray, type_out, length, data, arraybuffer, byte_offset
     ):
+        from ._values.arraybuffer import (
+            TypedArray,
+            DataView,
+            is_typedarray as _is_typedarray,
+        )
+
         py_val = ctx.python_value_from_napi(typedarray)
 
+        # Handle our TypedArray class
+        if _is_typedarray(py_val):
+            if type_out:
+                type_out[0] = py_val.array_type
+            if length:
+                length[0] = py_val.length
+            if data:
+                data[0] = py_val.data_ptr
+            if arraybuffer:
+                arraybuffer[0] = ctx.add_value(py_val.buffer)
+            if byte_offset:
+                byte_offset[0] = py_val.byte_offset
+            return napi_status.napi_ok
+
+        # Handle DataView
+        if isinstance(py_val, DataView):
+            if type_out:
+                return napi_status.napi_generic_failure  # DataView has no type
+            if length:
+                length[0] = py_val.byte_length
+            if data:
+                data[0] = py_val.data_ptr
+            if arraybuffer:
+                arraybuffer[0] = ctx.add_value(py_val.buffer)
+            if byte_offset:
+                byte_offset[0] = py_val.byte_offset
+            return napi_status.napi_ok
+
+        # Legacy: handle bytes/bytearray as Uint8Array
         if isinstance(py_val, (bytes, bytearray)):
-            # Treat as Uint8Array
             if type_out:
                 type_out[0] = 1  # napi_uint8_array
             if length:
@@ -1277,6 +1389,296 @@ def _create_function_table() -> NapiPythonFunctions:
 
         return napi_status.napi_ok
 
+    # =============================================================================
+    # ArrayBuffer Functions
+    # =============================================================================
+
+    from ._values.arraybuffer import (
+        ArrayBuffer,
+        TypedArray,
+        DataView,
+        is_arraybuffer as _is_arraybuffer,
+        is_typedarray as _is_typedarray,
+        is_dataview as _is_dataview,
+    )
+    from ._napi.types import napi_typedarray_type
+
+    @FuncCreateArraybuffer
+    def create_arraybuffer(env, byte_length, data, result):
+        try:
+            arraybuffer = ArrayBuffer(byte_length)
+            if data:
+                data[0] = arraybuffer.data_ptr
+            handle = ctx.add_value(arraybuffer)
+            result[0] = handle
+            return napi_status.napi_ok
+        except Exception:
+            return napi_status.napi_generic_failure
+
+    @FuncGetArraybufferInfo
+    def get_arraybuffer_info(env, arraybuffer_handle, data, byte_length):
+        try:
+            py_val = ctx.python_value_from_napi(arraybuffer_handle)
+            if not _is_arraybuffer(py_val):
+                return napi_status.napi_invalid_arg
+            if data:
+                data[0] = py_val.data_ptr
+            if byte_length:
+                byte_length[0] = py_val.byte_length
+            return napi_status.napi_ok
+        except Exception:
+            return napi_status.napi_generic_failure
+
+    @FuncIsDetachedArraybuffer
+    def is_detached_arraybuffer(env, arraybuffer_handle, result):
+        try:
+            py_val = ctx.python_value_from_napi(arraybuffer_handle)
+            if _is_arraybuffer(py_val):
+                result[0] = py_val.detached
+            else:
+                result[0] = False
+            return napi_status.napi_ok
+        except Exception:
+            return napi_status.napi_generic_failure
+
+    @FuncDetachArraybuffer
+    def detach_arraybuffer(env, arraybuffer_handle):
+        try:
+            py_val = ctx.python_value_from_napi(arraybuffer_handle)
+            if not _is_arraybuffer(py_val):
+                return napi_status.napi_arraybuffer_expected
+            py_val.detach()
+            return napi_status.napi_ok
+        except Exception:
+            return napi_status.napi_generic_failure
+
+    @FuncIsArraybuffer
+    def is_arraybuffer(env, value, result):
+        try:
+            py_val = ctx.python_value_from_napi(value)
+            result[0] = _is_arraybuffer(py_val)
+            return napi_status.napi_ok
+        except Exception:
+            return napi_status.napi_generic_failure
+
+    # =============================================================================
+    # TypedArray Functions
+    # =============================================================================
+
+    @FuncCreateTypedarray
+    def create_typedarray(
+        env, array_type, length, arraybuffer_handle, byte_offset, result
+    ):
+        try:
+            buffer = ctx.python_value_from_napi(arraybuffer_handle)
+            if not _is_arraybuffer(buffer):
+                return napi_status.napi_invalid_arg
+            typedarray = TypedArray(array_type, buffer, byte_offset, length)
+            handle = ctx.add_value(typedarray)
+            result[0] = handle
+            return napi_status.napi_ok
+        except Exception:
+            return napi_status.napi_generic_failure
+
+    # =============================================================================
+    # DataView Functions
+    # =============================================================================
+
+    @FuncCreateDataview
+    def create_dataview(env, byte_length, arraybuffer_handle, byte_offset, result):
+        try:
+            buffer = ctx.python_value_from_napi(arraybuffer_handle)
+            if not _is_arraybuffer(buffer):
+                return napi_status.napi_invalid_arg
+            dataview = DataView(buffer, byte_offset, byte_length)
+            handle = ctx.add_value(dataview)
+            result[0] = handle
+            return napi_status.napi_ok
+        except Exception:
+            return napi_status.napi_generic_failure
+
+    @FuncGetDataviewInfo
+    def get_dataview_info(
+        env, dataview_handle, byte_length, data, arraybuffer, byte_offset
+    ):
+        try:
+            py_val = ctx.python_value_from_napi(dataview_handle)
+            if not _is_dataview(py_val):
+                return napi_status.napi_invalid_arg
+            if byte_length:
+                byte_length[0] = py_val.byte_length
+            if data:
+                data[0] = py_val.data_ptr
+            if arraybuffer:
+                arraybuffer[0] = ctx.add_value(py_val.buffer)
+            if byte_offset:
+                byte_offset[0] = py_val.byte_offset
+            return napi_status.napi_ok
+        except Exception:
+            return napi_status.napi_generic_failure
+
+    @FuncIsDataview
+    def is_dataview(env, value, result):
+        try:
+            py_val = ctx.python_value_from_napi(value)
+            result[0] = _is_dataview(py_val)
+            return napi_status.napi_ok
+        except Exception:
+            return napi_status.napi_generic_failure
+
+    # =============================================================================
+    # Buffer Functions
+    # =============================================================================
+
+    @FuncCreateBuffer
+    def create_buffer(env, size, data, result):
+        try:
+            arraybuffer = ArrayBuffer(size)
+            buffer = TypedArray(
+                napi_typedarray_type.napi_uint8_array, arraybuffer, 0, size
+            )
+            if data:
+                data[0] = arraybuffer.data_ptr
+            handle = ctx.add_value(buffer)
+            result[0] = handle
+            return napi_status.napi_ok
+        except Exception:
+            return napi_status.napi_generic_failure
+
+    @FuncCreateBufferCopy
+    def create_buffer_copy(env, length, source_data, result_data, result):
+        from ctypes import memmove
+
+        try:
+            arraybuffer = ArrayBuffer(length)
+            if source_data and length > 0:
+                memmove(arraybuffer.data_ptr, source_data, length)
+            buffer = TypedArray(
+                napi_typedarray_type.napi_uint8_array, arraybuffer, 0, length
+            )
+            if result_data:
+                result_data[0] = arraybuffer.data_ptr
+            handle = ctx.add_value(buffer)
+            result[0] = handle
+            return napi_status.napi_ok
+        except Exception:
+            return napi_status.napi_generic_failure
+
+    @FuncGetBufferInfo
+    def get_buffer_info(env, buffer_handle, data, length):
+        from ctypes import c_uint8, addressof
+
+        try:
+            py_val = ctx.python_value_from_napi(buffer_handle)
+            if _is_typedarray(py_val):
+                if data:
+                    data[0] = py_val.data_ptr
+                if length:
+                    length[0] = py_val.length
+                return napi_status.napi_ok
+            if _is_dataview(py_val):
+                if data:
+                    data[0] = py_val.data_ptr
+                if length:
+                    length[0] = py_val.byte_length
+                return napi_status.napi_ok
+            # Handle Python bytes/bytearray
+            if isinstance(py_val, (bytes, bytearray)):
+                # Need to convert to a stable buffer
+                # Store it as an ArrayBuffer for this call
+                buf = ArrayBuffer.from_data(py_val)
+                # Store reference to prevent GC
+                ctx._temp_buffers = getattr(ctx, "_temp_buffers", [])
+                ctx._temp_buffers.append(buf)
+                if data:
+                    data[0] = buf.data_ptr
+                if length:
+                    length[0] = len(py_val)
+                return napi_status.napi_ok
+            return napi_status.napi_invalid_arg
+        except Exception:
+            return napi_status.napi_generic_failure
+
+    @FuncIsBuffer
+    def is_buffer(env, value, result):
+        try:
+            py_val = ctx.python_value_from_napi(value)
+            result[0] = isinstance(py_val, (bytes, bytearray, TypedArray))
+            return napi_status.napi_ok
+        except Exception:
+            return napi_status.napi_generic_failure
+
+    # =============================================================================
+    # External Functions
+    # =============================================================================
+
+    @FuncCreateExternal
+    def create_external(env, data_ptr, finalize_cb, finalize_hint, result):
+        try:
+            external = ctx.create_external(data_ptr)
+            handle = ctx.add_value(external)
+            result[0] = handle
+            return napi_status.napi_ok
+        except Exception:
+            return napi_status.napi_generic_failure
+
+    @FuncGetValueExternal
+    def get_value_external(env, value, result):
+        try:
+            py_val = ctx.python_value_from_napi(value)
+            if ctx.is_external(py_val):
+                result[0] = ctx.get_external_value(py_val)
+                return napi_status.napi_ok
+            return napi_status.napi_invalid_arg
+        except Exception:
+            return napi_status.napi_generic_failure
+
+    # =============================================================================
+    # Additional Error Functions
+    # =============================================================================
+
+    @FuncThrowTypeError
+    def throw_type_error(env, code, msg):
+        env_obj = get_env(env)
+        if env_obj:
+            msg_str = msg.decode("utf-8") if msg else ""
+            env_obj.last_exception = TypeError(msg_str)
+        return napi_status.napi_ok
+
+    @FuncThrowRangeError
+    def throw_range_error(env, code, msg):
+        env_obj = get_env(env)
+        if env_obj:
+            msg_str = msg.decode("utf-8") if msg else ""
+            env_obj.last_exception = ValueError(msg_str)
+        return napi_status.napi_ok
+
+    @FuncCreateTypeError
+    def create_type_error(env, code, msg_handle, result):
+        try:
+            msg = ctx.python_value_from_napi(msg_handle)
+            if not isinstance(msg, str):
+                return napi_status.napi_string_expected
+            error = TypeError(msg)
+            handle = ctx.add_value(error)
+            result[0] = handle
+            return napi_status.napi_ok
+        except Exception:
+            return napi_status.napi_generic_failure
+
+    @FuncCreateRangeError
+    def create_range_error(env, code, msg_handle, result):
+        try:
+            msg = ctx.python_value_from_napi(msg_handle)
+            if not isinstance(msg, str):
+                return napi_status.napi_string_expected
+            error = ValueError(msg)
+            handle = ctx.add_value(error)
+            result[0] = handle
+            return napi_status.napi_ok
+        except Exception:
+            return napi_status.napi_generic_failure
+
     # Keep references to prevent GC
     _callback_refs.extend(
         [
@@ -1335,6 +1737,25 @@ def _create_function_table() -> NapiPythonFunctions:
             wrap,
             unwrap,
             define_class_impl,
+            create_arraybuffer,
+            get_arraybuffer_info,
+            is_detached_arraybuffer,
+            detach_arraybuffer,
+            is_arraybuffer,
+            create_typedarray,
+            create_dataview,
+            get_dataview_info,
+            is_dataview,
+            create_buffer,
+            create_buffer_copy,
+            get_buffer_info,
+            is_buffer,
+            create_external,
+            get_value_external,
+            throw_type_error,
+            throw_range_error,
+            create_type_error,
+            create_range_error,
         ]
     )
 
@@ -1394,6 +1815,25 @@ def _create_function_table() -> NapiPythonFunctions:
         wrap=wrap,
         unwrap=unwrap,
         define_class_impl=define_class_impl,
+        create_arraybuffer=create_arraybuffer,
+        get_arraybuffer_info=get_arraybuffer_info,
+        is_detached_arraybuffer=is_detached_arraybuffer,
+        detach_arraybuffer=detach_arraybuffer,
+        is_arraybuffer=is_arraybuffer,
+        create_typedarray=create_typedarray,
+        create_dataview=create_dataview,
+        get_dataview_info=get_dataview_info,
+        is_dataview=is_dataview,
+        create_buffer=create_buffer,
+        create_buffer_copy=create_buffer_copy,
+        get_buffer_info=get_buffer_info,
+        is_buffer=is_buffer,
+        create_external=create_external,
+        get_value_external=get_value_external,
+        throw_type_error=throw_type_error,
+        throw_range_error=throw_range_error,
+        create_type_error=create_type_error,
+        create_range_error=create_range_error,
     )
 
 

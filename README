@@ -1,5 +1,7 @@
 # napi-python
 
+WARNING! experimental, still does not implement all of NAPI!
+
 Load Node-API (.node) native addons in Python.
 
 ## Usage
@@ -77,7 +79,7 @@ Native Addon (.node)
 
 ### Priority 6 - Additional Types
 - [ ] BigInt support
-- [ ] Date support  
+- [ ] Date support
 - [ ] Symbol support
 - [ ] napi_define_properties
 

@@ -11,3 +11,5 @@ read ./IMPLEMENTATION_PLAN.md to understand how it was made.
 some files inside tests are written in python and can be used to validate changes to NAPI.
 
 if you skip code when adding the NAPI code mark these lines with TODO comments so it is easy to spot these places in the future
+
+for all cases in python where we handle exception with `except Exception:` where you ignore the error always add a print and not only `pass`. this way we do not miss important context in logs.

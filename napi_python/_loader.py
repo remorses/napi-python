@@ -31,7 +31,7 @@ from typing import Optional, Any, Dict, Callable, List
 import sys
 import os
 
-from ._runtime import Context, Env, get_default_context
+from ._runtime import Context, Env, get_default_context, Reference, ReferenceOwnership
 from ._napi.types import (
     napi_status,
     napi_valuetype,
@@ -145,6 +145,8 @@ FuncDefineClass = CFUNCTYPE(
 FuncCreateReference = CFUNCTYPE(c_int, c_void_p, c_void_p, c_uint32, POINTER(c_void_p))
 FuncDeleteReference = CFUNCTYPE(c_int, c_void_p, c_void_p)
 FuncGetReferenceValue = CFUNCTYPE(c_int, c_void_p, c_void_p, POINTER(c_void_p))
+FuncRefReference = CFUNCTYPE(c_int, c_void_p, c_void_p, POINTER(c_uint32))
+FuncUnrefReference = CFUNCTYPE(c_int, c_void_p, c_void_p, POINTER(c_uint32))
 FuncThrow = CFUNCTYPE(c_int, c_void_p, c_void_p)
 FuncThrowError = CFUNCTYPE(c_int, c_void_p, c_char_p, c_char_p)
 FuncCreateError = CFUNCTYPE(c_int, c_void_p, c_void_p, c_void_p, POINTER(c_void_p))
@@ -184,6 +186,7 @@ FuncCreateTsfn = CFUNCTYPE(
     POINTER(c_void_p),
 )
 FuncCallTsfn = CFUNCTYPE(c_int, c_void_p, c_void_p, c_int)
+FuncAcquireTsfn = CFUNCTYPE(c_int, c_void_p)
 FuncReleaseTsfn = CFUNCTYPE(c_int, c_void_p, c_int)
 # Class/wrap functions
 FuncWrap = CFUNCTYPE(
@@ -325,6 +328,8 @@ class NapiPythonFunctions(Structure):
         ("create_reference", FuncCreateReference),
         ("delete_reference", FuncDeleteReference),
         ("get_reference_value", FuncGetReferenceValue),
+        ("reference_ref", FuncRefReference),
+        ("reference_unref", FuncUnrefReference),
         ("throw_", FuncThrow),
         ("throw_error", FuncThrowError),
         ("create_error", FuncCreateError),
@@ -342,6 +347,7 @@ class NapiPythonFunctions(Structure):
         # Threadsafe functions
         ("create_tsfn", FuncCreateTsfn),
         ("call_tsfn", FuncCallTsfn),
+        ("acquire_tsfn", FuncAcquireTsfn),
         ("release_tsfn", FuncReleaseTsfn),
         # Class/wrap functions
         ("wrap", FuncWrap),
@@ -762,22 +768,38 @@ def _create_function_table() -> NapiPythonFunctions:
 
     @FuncCallFunction
     def call_function(env_id, recv, func, argc, argv, result):
-        """Call a JavaScript function."""
+        """Call a JavaScript function with receiver (this)."""
         env_obj = get_env(env_id)
         if not env_obj:
             if result:
                 result[0] = Constant.UNDEFINED
             return napi_status.napi_invalid_arg
 
+        # Validate recv - emnapi requires it
+        if not recv:
+            if result:
+                result[0] = Constant.UNDEFINED
+            return napi_status.napi_invalid_arg
+
         # Get the function
         py_func = ctx.python_value_from_napi(func)
+        if not func:
+            if result:
+                result[0] = Constant.UNDEFINED
+            return napi_status.napi_invalid_arg
         if not callable(py_func):
             if result:
                 result[0] = Constant.UNDEFINED
-            return napi_status.napi_function_expected
+            return napi_status.napi_invalid_arg
 
-        # Get receiver
-        py_recv = ctx.python_value_from_napi(recv) if recv else None
+        # Get receiver (this value)
+        py_recv = ctx.python_value_from_napi(recv)
+
+        # Validate argc/argv
+        if argc > 0 and not argv:
+            if result:
+                result[0] = Constant.UNDEFINED
+            return napi_status.napi_invalid_arg
 
         # Get arguments
         args = []
@@ -787,7 +809,22 @@ def _create_function_table() -> NapiPythonFunctions:
 
         # Call the function
         try:
-            ret = py_func(*args)
+            # Check if this is a wrapped NAPI function that needs callback_info
+            if hasattr(py_func, '__name__') and py_recv is not None:
+                # For wrapped NAPI functions, we need to set up scope with thiz
+                # Check if this function was created by our create_function
+                # by checking for our wrapper signature
+                scope = ctx.open_scope(env_obj)
+                try:
+                    scope.callback_info.thiz = py_recv
+                    scope.callback_info.args = args
+                    ret = py_func(*args)
+                finally:
+                    ctx.close_scope(env_obj, scope)
+            else:
+                # Regular Python function call
+                ret = py_func(*args)
+            
             if result:
                 result[0] = ctx.add_value(ret)
         except Exception as e:
@@ -798,7 +835,7 @@ def _create_function_table() -> NapiPythonFunctions:
 
         return napi_status.napi_ok
 
-    # Storage for wrapped native objects
+    # Storage for wrapped native objects (for napi_wrap/unwrap)
     _wrap_store = {}
     _wrap_counter = [1]
 
@@ -814,34 +851,68 @@ def _create_function_table() -> NapiPythonFunctions:
         )
 
     @FuncCreateReference
-    def create_reference(env, value, initial_refcount, result):
-        # Store the value to prevent GC
-        ref_id = _wrap_counter[0]
-        _wrap_counter[0] += 1
+    def create_reference(env_id, value, initial_refcount, result):
+        """Create a reference to a value."""
+        env_obj = get_env(env_id)
+        if not env_obj:
+            return napi_status.napi_invalid_arg
+        
         py_value = ctx.python_value_from_napi(value)
-        _wrap_store[ref_id] = {"value": py_value, "refcount": initial_refcount}
+        
+        # Create a proper Reference object
+        ref = Reference.create(
+            ctx, env_obj, py_value, initial_refcount, ReferenceOwnership.kUserland
+        )
+        
         if result:
-            result[0] = ref_id
+            result[0] = ref.id
         return napi_status.napi_ok
 
     @FuncDeleteReference
-    def delete_reference(env, ref):
-        # Remove from store if exists
-        _wrap_store.pop(ref, None)
+    def delete_reference(env_id, ref_id):
+        """Delete a reference."""
+        ref = ctx.get_ref(ref_id)
+        if ref:
+            ref.dispose()
         return napi_status.napi_ok
 
     @FuncGetReferenceValue
-    def get_reference_value(env, ref, result):
+    def get_reference_value(env_id, ref_id, result):
         """Get the value from a reference."""
-        ref_data = _wrap_store.get(ref)
-        if ref_data and "value" in ref_data:
-            py_value = ref_data["value"]
-            if result:
-                result[0] = ctx.add_value(py_value)
-            return napi_status.napi_ok
-        # Reference not found or empty
+        ref = ctx.get_ref(ref_id)
+        if ref:
+            value = ref.get()
+            if value is not None:
+                if result:
+                    result[0] = ctx.add_value(value)
+                return napi_status.napi_ok
+        # Reference not found or value was collected
         if result:
             result[0] = Constant.UNDEFINED
+        return napi_status.napi_ok
+
+    @FuncRefReference
+    def reference_ref(env_id, ref_id, result):
+        """Increment reference count."""
+        ref = ctx.get_ref(ref_id)
+        if not ref:
+            return napi_status.napi_invalid_arg
+        
+        new_count = ref.ref()
+        if result:
+            result[0] = new_count
+        return napi_status.napi_ok
+
+    @FuncUnrefReference
+    def reference_unref(env_id, ref_id, result):
+        """Decrement reference count."""
+        ref = ctx.get_ref(ref_id)
+        if not ref:
+            return napi_status.napi_invalid_arg
+        
+        new_count = ref.unref()
+        if result:
+            result[0] = new_count
         return napi_status.napi_ok
 
     @FuncThrow
@@ -1406,7 +1477,9 @@ def _create_function_table() -> NapiPythonFunctions:
             "call_js_cb": js_cb,
             "loop": loop,
             "queue": queue.Queue(maxsize=max_queue_size if max_queue_size > 0 else 0),
+            "max_queue_size": max_queue_size,
             "thread_count": initial_thread_count,
+            "is_closing": False,  # Proper closing state
             "closed": False,
             "finalize_data": thread_finalize_data,
             "finalize_cb": thread_finalize_cb,
@@ -1430,8 +1503,16 @@ def _create_function_table() -> NapiPythonFunctions:
         import threading
 
         tsfn_data = _tsfn_store.get(tsfn_id)
-        if not tsfn_data or tsfn_data["closed"]:
-            return napi_status.napi_closing
+        if not tsfn_data:
+            return napi_status.napi_invalid_arg
+        
+        # Check closing state
+        if tsfn_data.get("is_closing", False) or tsfn_data["closed"]:
+            if tsfn_data["thread_count"] == 0:
+                return napi_status.napi_invalid_arg
+            else:
+                tsfn_data["thread_count"] -= 1
+                return napi_status.napi_closing
 
         env_id = tsfn_data["env_id"]
         func = tsfn_data["func"]
@@ -1504,6 +1585,20 @@ def _create_function_table() -> NapiPythonFunctions:
 
         return napi_status.napi_ok
 
+    @FuncAcquireTsfn
+    def acquire_tsfn(tsfn_id):
+        """Acquire a threadsafe function (increment thread count)."""
+        tsfn_data = _tsfn_store.get(tsfn_id)
+        if not tsfn_data:
+            return napi_status.napi_invalid_arg
+        
+        # Check if closing
+        if tsfn_data.get("is_closing", False):
+            return napi_status.napi_closing
+        
+        tsfn_data["thread_count"] += 1
+        return napi_status.napi_ok
+
     @FuncReleaseTsfn
     def release_tsfn(tsfn_id, mode):
         """Release a threadsafe function."""
@@ -1511,12 +1606,39 @@ def _create_function_table() -> NapiPythonFunctions:
         if not tsfn_data:
             return napi_status.napi_ok
 
+        # Check thread count
+        if tsfn_data["thread_count"] == 0:
+            return napi_status.napi_invalid_arg
+
         tsfn_data["thread_count"] -= 1
 
-        if tsfn_data["thread_count"] <= 0 or mode == 1:  # napi_tsfn_abort
-            tsfn_data["closed"] = True
-            # Could call finalize callback here
-            _tsfn_store.pop(tsfn_id, None)
+        # napi_tsfn_abort = 1
+        if tsfn_data["thread_count"] == 0 or mode == 1:
+            is_closing = tsfn_data.get("is_closing", False)
+            if not is_closing:
+                # Set closing state
+                is_closing_value = 1 if mode == 1 else 0
+                tsfn_data["is_closing"] = bool(is_closing_value)
+                
+                # Mark as closed
+                tsfn_data["closed"] = True
+                
+                # Call finalize callback if provided
+                finalize_cb = tsfn_data.get("finalize_cb")
+                finalize_data = tsfn_data.get("finalize_data")
+                context = tsfn_data.get("context")
+                
+                if finalize_cb:
+                    try:
+                        FinalizeCb = CFUNCTYPE(None, c_void_p, c_void_p, c_void_p)
+                        finalize_func = ctypes.cast(finalize_cb, FinalizeCb)
+                        env_id = tsfn_data["env_id"]
+                        finalize_func(env_id, finalize_data, context)
+                    except Exception as e:
+                        print(f"[napi-python] TSFN finalize error: {e}")
+                
+                # Remove from store
+                _tsfn_store.pop(tsfn_id, None)
 
         return napi_status.napi_ok
 
@@ -1867,14 +1989,38 @@ def _create_function_table() -> NapiPythonFunctions:
     @FuncGetNewTarget
     def get_new_target(env_id, cbinfo, result):
         """Get the new.target value from callback info."""
+        env_obj = get_env(env_id)
+        if not env_obj:
+            return napi_status.napi_invalid_arg
+        if not cbinfo:
+            return napi_status.napi_invalid_arg
+        if not result:
+            return napi_status.napi_invalid_arg
+        
         try:
             cb_info = ctx.get_callback_info(cbinfo)
-            new_target = getattr(cb_info, "new_target", None)
-            if result:
-                if new_target is not None:
-                    result[0] = ctx.add_value(new_target)
+            thiz = cb_info.thiz
+            fn = cb_info.fn
+            
+            # Logic from emnapi: check if this is a constructor call
+            # thiz == null || thiz.constructor == null ? 0 
+            #   : thiz instanceof fn ? thiz.constructor : 0
+            if thiz is None:
+                result[0] = Constant.UNDEFINED
+            elif not hasattr(thiz, '__class__'):
+                result[0] = Constant.UNDEFINED
+            else:
+                # Check if thiz is an instance of the function/class
+                # In Python, fn might be the class itself or a method
+                thiz_type = type(thiz)
+                
+                # If fn is callable and thiz is an instance of something fn created
+                if fn is not None and isinstance(thiz, type(thiz)):
+                    # Return the constructor (type of thiz)
+                    result[0] = ctx.add_value(thiz_type)
                 else:
                     result[0] = Constant.UNDEFINED
+            
             return napi_status.napi_ok
         except Exception:
             if result:
@@ -2000,6 +2146,8 @@ def _create_function_table() -> NapiPythonFunctions:
             create_reference,
             delete_reference,
             get_reference_value,
+            reference_ref,
+            reference_unref,
             throw_,
             throw_error,
             create_error,
@@ -2015,6 +2163,7 @@ def _create_function_table() -> NapiPythonFunctions:
             is_promise,
             create_tsfn,
             call_tsfn,
+            acquire_tsfn,
             release_tsfn,
             wrap,
             unwrap,
@@ -2086,6 +2235,8 @@ def _create_function_table() -> NapiPythonFunctions:
         create_reference=create_reference,
         delete_reference=delete_reference,
         get_reference_value=get_reference_value,
+        reference_ref=reference_ref,
+        reference_unref=reference_unref,
         throw_=throw_,
         throw_error=throw_error,
         create_error=create_error,
@@ -2101,6 +2252,7 @@ def _create_function_table() -> NapiPythonFunctions:
         is_promise=is_promise,
         create_tsfn=create_tsfn,
         call_tsfn=call_tsfn,
+        acquire_tsfn=acquire_tsfn,
         release_tsfn=release_tsfn,
         wrap=wrap,
         unwrap=unwrap,

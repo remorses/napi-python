@@ -21,7 +21,7 @@ class External:
     to wrap ctypes pointers or integer addresses.
     """
 
-    __slots__ = ()
+    __slots__ = ("__weakref__",)  # Allow weak references
 
     def __new__(cls, value: int):
         instance = object.__new__(cls)

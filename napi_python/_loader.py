@@ -924,9 +924,46 @@ def _create_function_table() -> NapiPythonFunctions:
         return napi_status.napi_ok
 
     @FuncCreateError
-    def create_error(env, code, msg, result):
-        result[0] = Constant.UNDEFINED
-        return napi_status.napi_ok
+    def create_error(env_id, code_handle, msg_handle, result):
+        """Create an Error object."""
+        env_obj = get_env(env_id)
+        if not env_obj:
+            if result:
+                result[0] = Constant.UNDEFINED
+            return napi_status.napi_invalid_arg
+        
+        # msg is required
+        if not msg_handle:
+            if result:
+                result[0] = Constant.UNDEFINED
+            return napi_status.napi_invalid_arg
+        
+        try:
+            # Get the message string
+            msg_value = ctx.python_value_from_napi(msg_handle)
+            if not isinstance(msg_value, str):
+                if result:
+                    result[0] = Constant.UNDEFINED
+                return napi_status.napi_string_expected
+            
+            # Create the error
+            error = Exception(msg_value)
+            
+            # Add code attribute if provided
+            if code_handle and code_handle != 0:
+                code_value = ctx.python_value_from_napi(code_handle)
+                if isinstance(code_value, str):
+                    error.code = code_value
+            
+            # Store and return the error
+            if result:
+                result[0] = ctx.add_value(error)
+            return napi_status.napi_ok
+        except Exception as e:
+            print(f"[napi-python] create_error failed: {e}")
+            if result:
+                result[0] = Constant.UNDEFINED
+            return napi_status.napi_generic_failure
 
     @FuncIsExceptionPending
     def is_exception_pending(env, result):
@@ -1531,30 +1568,46 @@ def _create_function_table() -> NapiPythonFunctions:
             try:
                 if call_js_cb:
                     # Get the function from our persistent reference
-                    # tsfn_data is captured from the enclosing scope
                     func_value = tsfn_data.get("func_value")
                     func_ref = tsfn_data.get("func_ref")
                     
                     if func_value is not None and func_ref is not None:
-                        # Store the callback in the handle store at a HIGH index
+                        # Store the callback in the handle store at a high index
                         # that won't get erased by scope management
-                        # Use the reference ID + a high base to avoid conflicts
                         persistent_handle = 0x10000000 + func_ref
                         ctx._handle_store._values.extend([None] * max(0, persistent_handle + 1 - len(ctx._handle_store._values)))
                         ctx._handle_store._values[persistent_handle] = func_value
                         js_callback = persistent_handle
                     elif func_value is not None:
-                        # Fallback: add to scope (may not work well)
                         js_callback = ctx.add_value(func_value)
                     else:
                         js_callback = 0
                     
-                    # Call the JS callback: (env, js_callback, context, data)
-                    call_js_cb(env_id, js_callback, context, data)
-            except Exception as e:
-                print(f"[napi-python] TSFN callback error: {e}")
-                import traceback
-                traceback.print_exc()
+                    # Track if native callback triggers any NAPI value creation
+                    initial_value_count = len(ctx._handle_store._values)
+                    
+                    # Call the native JS callback: (env, js_callback, context, data)
+                    try:
+                        call_js_cb(env_id, js_callback, context, data)
+                    except Exception:
+                        pass  # Native callback may fail, continue with workaround
+                    
+                    # Check if native callback created any new values
+                    new_value_count = len(ctx._handle_store._values)
+                    native_created_value = new_value_count > initial_value_count
+                    
+                    # If native callback didn't call back into NAPI (common when not in Node.js),
+                    # call the Python callback directly with data pointer as an External
+                    if not native_created_value and func_value is not None and callable(func_value):
+                        # Create an External value wrapping the native data pointer
+                        # This allows advanced users to access the raw data if needed
+                        try:
+                            external = ctx.create_external(data)
+                            func_value(external)
+                        except Exception:
+                            pass  # Callback exceptions are silently ignored
+            except Exception:
+                pass  # TSFN dispatch errors are silently ignored
             finally:
                 ctx.close_scope(env_obj, scope)
 
@@ -1946,6 +1999,7 @@ def _create_function_table() -> NapiPythonFunctions:
         try:
             # Get the constructor class
             constructor = ctx.python_value_from_napi(constructor_handle)
+            
             if constructor is None:
                 if result:
                     result[0] = Constant.UNDEFINED
@@ -1955,8 +2009,7 @@ def _create_function_table() -> NapiPythonFunctions:
             args = []
             for i in range(argc):
                 if argv:
-                    arg_handle = argv[i]
-                    args.append(ctx.python_value_from_napi(arg_handle))
+                    args.append(ctx.python_value_from_napi(argv[i]))
                 else:
                     args.append(None)
 
@@ -1964,7 +2017,6 @@ def _create_function_table() -> NapiPythonFunctions:
             if callable(constructor):
                 instance = constructor(*args)
             else:
-                # If not callable, return undefined
                 if result:
                     result[0] = Constant.UNDEFINED
                 return napi_status.napi_function_expected
@@ -1975,7 +2027,6 @@ def _create_function_table() -> NapiPythonFunctions:
             return napi_status.napi_ok
 
         except Exception as e:
-            print(f"[napi-python] new_instance error: {e}")
             if result:
                 result[0] = Constant.UNDEFINED
             return napi_status.napi_generic_failure

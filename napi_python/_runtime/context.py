@@ -62,11 +62,17 @@ class CleanupQueue:
 
     def drain(self) -> None:
         """Execute all cleanup hooks in reverse order."""
-        hooks = sorted(self._hooks, key=lambda h: -h.order)
+        # Sort a copy by reverse order
+        hooks = sorted(self._hooks[:], key=lambda h: -h.order)
         for hook in hooks:
             if callable(hook.fn):
-                hook.fn(hook.arg)
-            self._hooks.remove(hook)
+                try:
+                    hook.fn(hook.arg)
+                except Exception:
+                    pass  # Ignore errors in cleanup hooks
+            # Remove from original list after execution
+            if hook in self._hooks:
+                self._hooks.remove(hook)
 
     def dispose(self) -> None:
         self._hooks.clear()

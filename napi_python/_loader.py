@@ -163,6 +163,28 @@ FuncGetTypedarrayInfo = CFUNCTYPE(
     POINTER(c_void_p),
     POINTER(c_size_t),
 )
+# Promise functions
+FuncCreatePromise = CFUNCTYPE(c_int, c_void_p, POINTER(c_void_p), POINTER(c_void_p))
+FuncResolveDeferred = CFUNCTYPE(c_int, c_void_p, c_void_p, c_void_p)
+FuncRejectDeferred = CFUNCTYPE(c_int, c_void_p, c_void_p, c_void_p)
+FuncIsPromise = CFUNCTYPE(c_int, c_void_p, c_void_p, POINTER(c_bool))
+# Threadsafe function
+FuncCreateTsfn = CFUNCTYPE(
+    c_int,
+    c_void_p,
+    c_void_p,
+    c_void_p,
+    c_void_p,
+    c_size_t,
+    c_size_t,
+    c_void_p,
+    c_void_p,
+    c_void_p,
+    c_void_p,
+    POINTER(c_void_p),
+)
+FuncCallTsfn = CFUNCTYPE(c_int, c_void_p, c_void_p, c_int)
+FuncReleaseTsfn = CFUNCTYPE(c_int, c_void_p, c_int)
 
 
 class NapiPythonFunctions(Structure):
@@ -214,6 +236,15 @@ class NapiPythonFunctions(Structure):
         ("close_handle_scope", FuncCloseHandleScope),
         ("coerce_to_string", FuncCoerceToString),
         ("get_typedarray_info", FuncGetTypedarrayInfo),
+        # Promise functions
+        ("create_promise", FuncCreatePromise),
+        ("resolve_deferred", FuncResolveDeferred),
+        ("reject_deferred", FuncRejectDeferred),
+        ("is_promise", FuncIsPromise),
+        # Threadsafe functions
+        ("create_tsfn", FuncCreateTsfn),
+        ("call_tsfn", FuncCallTsfn),
+        ("release_tsfn", FuncReleaseTsfn),
     ]
 
 
@@ -517,7 +548,16 @@ def _create_function_table() -> NapiPythonFunctions:
             return napi_status.napi_invalid_arg
 
         # Get function name
-        func_name = name.decode("utf-8") if name else "anonymous"
+        try:
+            if name and length > 0 and length < 1000:
+                func_name = name[:length].decode("utf-8", errors="replace")
+            elif name:
+                # Try to decode as null-terminated string
+                func_name = name.split(b"\x00")[0].decode("utf-8", errors="replace")
+            else:
+                func_name = "anonymous"
+        except Exception:
+            func_name = "anonymous"
 
         # Create a Python callable that wraps the native callback
         # cb is a C function pointer: napi_value (*)(napi_env, napi_callback_info)
@@ -693,6 +733,242 @@ def _create_function_table() -> NapiPythonFunctions:
 
         return napi_status.napi_arraybuffer_expected
 
+    # =========================================================================
+    # Promise Functions
+    # =========================================================================
+
+    @FuncCreatePromise
+    def create_promise(env_id, deferred_out, promise_out):
+        """Create a promise and deferred pair."""
+        import asyncio
+
+        env_obj = get_env(env_id)
+        if not env_obj:
+            return napi_status.napi_invalid_arg
+
+        # Create an asyncio Future
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            # No event loop, create one
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        future = loop.create_future()
+
+        # Store the deferred (future + loop) and get an ID
+        deferred_id = ctx.store_deferred({"future": future, "loop": loop})
+
+        # Store the future as a value and get a handle
+        promise_handle = ctx.add_value(future)
+
+        if deferred_out:
+            deferred_out[0] = deferred_id
+        if promise_out:
+            promise_out[0] = promise_handle
+
+        return napi_status.napi_ok
+
+    @FuncResolveDeferred
+    def resolve_deferred(env_id, deferred_id, resolution):
+        """Resolve a deferred promise."""
+        env_obj = get_env(env_id)
+        if not env_obj:
+            return napi_status.napi_invalid_arg
+
+        deferred = ctx.get_deferred(deferred_id)
+        if not deferred:
+            return napi_status.napi_invalid_arg
+
+        future = deferred["future"]
+        loop = deferred["loop"]
+
+        # Get the Python value for resolution
+        py_value = ctx.python_value_from_napi(resolution)
+
+        # Resolve the future (thread-safe)
+        if not future.done():
+            loop.call_soon_threadsafe(future.set_result, py_value)
+
+        # Clean up
+        ctx.delete_deferred(deferred_id)
+
+        return napi_status.napi_ok
+
+    @FuncRejectDeferred
+    def reject_deferred(env_id, deferred_id, rejection):
+        """Reject a deferred promise."""
+        env_obj = get_env(env_id)
+        if not env_obj:
+            return napi_status.napi_invalid_arg
+
+        deferred = ctx.get_deferred(deferred_id)
+        if not deferred:
+            return napi_status.napi_invalid_arg
+
+        future = deferred["future"]
+        loop = deferred["loop"]
+
+        # Get the Python value for rejection
+        py_value = ctx.python_value_from_napi(rejection)
+
+        # Convert to exception if needed
+        if isinstance(py_value, Exception):
+            exc = py_value
+        else:
+            exc = Exception(str(py_value) if py_value else "Promise rejected")
+
+        # Reject the future (thread-safe)
+        if not future.done():
+            loop.call_soon_threadsafe(future.set_exception, exc)
+
+        # Clean up
+        ctx.delete_deferred(deferred_id)
+
+        return napi_status.napi_ok
+
+    @FuncIsPromise
+    def is_promise(env_id, value, result):
+        """Check if a value is a promise (asyncio.Future)."""
+        import asyncio
+
+        if not result:
+            return napi_status.napi_invalid_arg
+
+        py_value = ctx.python_value_from_napi(value)
+        result[0] = isinstance(py_value, asyncio.Future)
+        return napi_status.napi_ok
+
+    # =========================================================================
+    # Threadsafe Function Support
+    # =========================================================================
+
+    # Storage for threadsafe functions
+    _tsfn_store = {}
+    _tsfn_counter = [1]  # Use list to allow modification in nested function
+
+    @FuncCreateTsfn
+    def create_tsfn(
+        env_id,
+        func,
+        async_resource,
+        async_resource_name,
+        max_queue_size,
+        initial_thread_count,
+        thread_finalize_data,
+        thread_finalize_cb,
+        context,
+        call_js_cb,
+        result,
+    ):
+        """Create a threadsafe function."""
+        import asyncio
+        import threading
+        import queue
+
+        env_obj = get_env(env_id)
+        if not env_obj:
+            return napi_status.napi_invalid_arg
+
+        # Get or create event loop
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        # Create the threadsafe function data
+        tsfn_id = _tsfn_counter[0]
+        _tsfn_counter[0] += 1
+
+        # Cast call_js_cb to a callable
+        if call_js_cb:
+            CallJsCb = CFUNCTYPE(None, c_void_p, c_void_p, c_void_p, c_void_p)
+            js_cb = ctypes.cast(call_js_cb, CallJsCb)
+        else:
+            js_cb = None
+
+        tsfn_data = {
+            "id": tsfn_id,
+            "env_id": env_id,
+            "func": func,
+            "context": context,
+            "call_js_cb": js_cb,
+            "loop": loop,
+            "queue": queue.Queue(maxsize=max_queue_size if max_queue_size > 0 else 0),
+            "thread_count": initial_thread_count,
+            "closed": False,
+            "finalize_data": thread_finalize_data,
+            "finalize_cb": thread_finalize_cb,
+        }
+
+        _tsfn_store[tsfn_id] = tsfn_data
+        _callback_refs.append(tsfn_data)
+        if js_cb:
+            _callback_refs.append(js_cb)
+
+        if result:
+            result[0] = tsfn_id
+
+        return napi_status.napi_ok
+
+    @FuncCallTsfn
+    def call_tsfn(tsfn_id, data, is_blocking):
+        """Call a threadsafe function."""
+        import asyncio
+
+        tsfn_data = _tsfn_store.get(tsfn_id)
+        if not tsfn_data or tsfn_data["closed"]:
+            return napi_status.napi_closing
+
+        env_id = tsfn_data["env_id"]
+        func = tsfn_data["func"]
+        context = tsfn_data["context"]
+        call_js_cb = tsfn_data["call_js_cb"]
+        loop = tsfn_data["loop"]
+
+        def dispatch():
+            """Execute the callback on the main thread."""
+            env_obj = get_env(env_id)
+            if not env_obj:
+                return
+
+            # Open a scope for this callback
+            scope = ctx.open_scope(env_obj)
+            try:
+                if call_js_cb:
+                    # Call the JS callback: (env, js_callback, context, data)
+                    call_js_cb(env_id, func, context, data)
+            except Exception as e:
+                print(f"[napi-python] TSFN callback error: {e}")
+            finally:
+                ctx.close_scope(env_obj, scope)
+
+        # Dispatch to the event loop
+        try:
+            loop.call_soon_threadsafe(dispatch)
+        except RuntimeError:
+            # Loop might be closed, try to run synchronously
+            dispatch()
+
+        return napi_status.napi_ok
+
+    @FuncReleaseTsfn
+    def release_tsfn(tsfn_id, mode):
+        """Release a threadsafe function."""
+        tsfn_data = _tsfn_store.get(tsfn_id)
+        if not tsfn_data:
+            return napi_status.napi_ok
+
+        tsfn_data["thread_count"] -= 1
+
+        if tsfn_data["thread_count"] <= 0 or mode == 1:  # napi_tsfn_abort
+            tsfn_data["closed"] = True
+            # Could call finalize callback here
+            _tsfn_store.pop(tsfn_id, None)
+
+        return napi_status.napi_ok
+
     # Keep references to prevent GC
     _callback_refs.extend(
         [
@@ -741,6 +1017,13 @@ def _create_function_table() -> NapiPythonFunctions:
             close_handle_scope,
             coerce_to_string,
             get_typedarray_info,
+            create_promise,
+            resolve_deferred,
+            reject_deferred,
+            is_promise,
+            create_tsfn,
+            call_tsfn,
+            release_tsfn,
         ]
     )
 
@@ -790,6 +1073,13 @@ def _create_function_table() -> NapiPythonFunctions:
         close_handle_scope=close_handle_scope,
         coerce_to_string=coerce_to_string,
         get_typedarray_info=get_typedarray_info,
+        create_promise=create_promise,
+        resolve_deferred=resolve_deferred,
+        reject_deferred=reject_deferred,
+        is_promise=is_promise,
+        create_tsfn=create_tsfn,
+        call_tsfn=call_tsfn,
+        release_tsfn=release_tsfn,
     )
 
 

@@ -1,0 +1,1 @@
+/Users/morse/kimaki/napi-python/test-addon/target/aarch64-apple-darwin/release/libtest_addon.dylib: /Users/morse/kimaki/napi-python/test-addon/build.rs /Users/morse/kimaki/napi-python/test-addon/src/lib.rs

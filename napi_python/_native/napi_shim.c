@@ -151,6 +151,15 @@ typedef struct {
     napi_status (*close_handle_scope)(napi_env env, napi_handle_scope scope);
     napi_status (*coerce_to_string)(napi_env env, napi_value value, napi_value* result);
     napi_status (*get_typedarray_info)(napi_env env, napi_value typedarray, napi_typedarray_type* type, size_t* length, void** data, napi_value* arraybuffer, size_t* byte_offset);
+    // Promise functions
+    napi_status (*create_promise)(napi_env env, napi_deferred* deferred, napi_value* promise);
+    napi_status (*resolve_deferred)(napi_env env, napi_deferred deferred, napi_value resolution);
+    napi_status (*reject_deferred)(napi_env env, napi_deferred deferred, napi_value rejection);
+    napi_status (*is_promise)(napi_env env, napi_value value, bool* is_promise);
+    // Threadsafe function
+    napi_status (*create_tsfn)(napi_env env, napi_value func, napi_value async_resource, napi_value async_resource_name, size_t max_queue_size, size_t initial_thread_count, void* thread_finalize_data, napi_finalize thread_finalize_cb, void* context, void* call_js_cb, void** result);
+    napi_status (*call_tsfn)(void* func, void* data, int is_blocking);
+    napi_status (*release_tsfn)(void* func, int mode);
 } NapiPythonFunctions;
 
 // Global function table
@@ -440,10 +449,205 @@ napi_status napi_get_typedarray_info(napi_env env, napi_value typedarray, napi_t
     return napi_generic_failure;
 }
 
+// =============================================================================
+// Promise Functions
+// =============================================================================
+
+napi_status napi_create_promise(napi_env env, napi_deferred* deferred, napi_value* promise) {
+    CHECK_FUNCS();
+    if (g_funcs->create_promise) return g_funcs->create_promise(env, deferred, promise);
+    return napi_generic_failure;
+}
+
+napi_status napi_resolve_deferred(napi_env env, napi_deferred deferred, napi_value resolution) {
+    CHECK_FUNCS();
+    if (g_funcs->resolve_deferred) return g_funcs->resolve_deferred(env, deferred, resolution);
+    return napi_generic_failure;
+}
+
+napi_status napi_reject_deferred(napi_env env, napi_deferred deferred, napi_value rejection) {
+    CHECK_FUNCS();
+    if (g_funcs->reject_deferred) return g_funcs->reject_deferred(env, deferred, rejection);
+    return napi_generic_failure;
+}
+
+napi_status napi_is_promise(napi_env env, napi_value value, bool* is_promise) {
+    CHECK_FUNCS();
+    if (g_funcs->is_promise) return g_funcs->is_promise(env, value, is_promise);
+    if (is_promise) *is_promise = false;
+    return napi_ok;
+}
+
 // Last error info - simple implementation
 static napi_extended_error_info g_last_error = {0};
 
 napi_status napi_get_last_error_info(napi_env env, const napi_extended_error_info** result) {
     if (result) *result = &g_last_error;
+    return napi_ok;
+}
+
+// =============================================================================
+// Additional NAPI stubs (not yet fully implemented)
+// =============================================================================
+
+napi_status napi_add_env_cleanup_hook(napi_env env, void (*fun)(void* arg), void* arg) {
+    // TODO: Implement cleanup hooks
+    return napi_ok;
+}
+
+napi_status napi_remove_env_cleanup_hook(napi_env env, void (*fun)(void* arg), void* arg) {
+    return napi_ok;
+}
+
+napi_status napi_create_array_with_length(napi_env env, size_t length, napi_value* result) {
+    CHECK_FUNCS();
+    if (g_funcs->create_array) {
+        napi_status status = g_funcs->create_array(env, result);
+        // TODO: Set array length properly
+        return status;
+    }
+    return napi_generic_failure;
+}
+
+napi_status napi_wrap(napi_env env, napi_value js_object, void* native_object, napi_finalize finalize_cb, void* finalize_hint, napi_ref* result) {
+    // TODO: Implement wrap
+    if (result) *result = NULL;
+    return napi_ok;
+}
+
+napi_status napi_unwrap(napi_env env, napi_value js_object, void** result) {
+    // TODO: Implement unwrap
+    if (result) *result = NULL;
+    return napi_ok;
+}
+
+napi_status napi_remove_wrap(napi_env env, napi_value js_object, void** result) {
+    if (result) *result = NULL;
+    return napi_ok;
+}
+
+napi_status napi_reference_ref(napi_env env, napi_ref ref, uint32_t* result) {
+    if (result) *result = 1;
+    return napi_ok;
+}
+
+napi_status napi_reference_unref(napi_env env, napi_ref ref, uint32_t* result) {
+    if (result) *result = 0;
+    return napi_ok;
+}
+
+typedef struct napi_threadsafe_function__* napi_threadsafe_function;
+
+napi_status napi_create_threadsafe_function(
+    napi_env env,
+    napi_value func,
+    napi_value async_resource,
+    napi_value async_resource_name,
+    size_t max_queue_size,
+    size_t initial_thread_count,
+    void* thread_finalize_data,
+    napi_finalize thread_finalize_cb,
+    void* context,
+    void (*call_js_cb)(napi_env env, napi_value js_callback, void* context, void* data),
+    napi_threadsafe_function* result
+) {
+    CHECK_FUNCS();
+    if (g_funcs->create_tsfn) {
+        return g_funcs->create_tsfn(env, func, async_resource, async_resource_name,
+            max_queue_size, initial_thread_count, thread_finalize_data, thread_finalize_cb,
+            context, (void*)call_js_cb, (void**)result);
+    }
+    if (result) *result = NULL;
+    return napi_ok;
+}
+
+napi_status napi_unref_threadsafe_function(napi_env env, napi_threadsafe_function func) {
+    return napi_ok;
+}
+
+napi_status napi_ref_threadsafe_function(napi_env env, napi_threadsafe_function func) {
+    return napi_ok;
+}
+
+napi_status napi_acquire_threadsafe_function(napi_threadsafe_function func) {
+    return napi_ok;
+}
+
+napi_status napi_release_threadsafe_function(napi_threadsafe_function func, int mode) {
+    CHECK_FUNCS();
+    if (g_funcs->release_tsfn) {
+        return g_funcs->release_tsfn((void*)func, mode);
+    }
+    return napi_ok;
+}
+
+napi_status napi_call_threadsafe_function(napi_threadsafe_function func, void* data, int is_blocking) {
+    CHECK_FUNCS();
+    if (g_funcs->call_tsfn) {
+        return g_funcs->call_tsfn((void*)func, data, is_blocking);
+    }
+    return napi_ok;
+}
+
+napi_status napi_get_threadsafe_function_context(napi_threadsafe_function func, void** result) {
+    if (result) *result = NULL;
+    return napi_ok;
+}
+
+napi_status napi_has_property(napi_env env, napi_value object, napi_value key, bool* result) {
+    if (result) *result = false;
+    return napi_ok;
+}
+
+napi_status napi_has_named_property(napi_env env, napi_value object, const char* utf8name, bool* result) {
+    if (result) *result = false;
+    return napi_ok;
+}
+
+napi_status napi_delete_property(napi_env env, napi_value object, napi_value key, bool* result) {
+    if (result) *result = true;
+    return napi_ok;
+}
+
+napi_status napi_has_element(napi_env env, napi_value object, uint32_t index, bool* result) {
+    if (result) *result = false;
+    return napi_ok;
+}
+
+napi_status napi_delete_element(napi_env env, napi_value object, uint32_t index, bool* result) {
+    if (result) *result = true;
+    return napi_ok;
+}
+
+napi_status napi_strict_equals(napi_env env, napi_value lhs, napi_value rhs, bool* result) {
+    if (result) *result = (lhs == rhs);
+    return napi_ok;
+}
+
+napi_status napi_get_prototype(napi_env env, napi_value object, napi_value* result) {
+    CHECK_FUNCS();
+    if (g_funcs->get_undefined) return g_funcs->get_undefined(env, result);
+    return napi_generic_failure;
+}
+
+napi_status napi_define_properties(napi_env env, napi_value object, size_t property_count, const napi_property_descriptor* properties) {
+    // TODO: Implement define properties
+    return napi_ok;
+}
+
+napi_status napi_set_instance_data(napi_env env, void* data, napi_finalize finalize_cb, void* finalize_hint) {
+    return napi_ok;
+}
+
+napi_status napi_get_instance_data(napi_env env, void** data) {
+    if (data) *data = NULL;
+    return napi_ok;
+}
+
+napi_status napi_object_freeze(napi_env env, napi_value object) {
+    return napi_ok;
+}
+
+napi_status napi_object_seal(napi_env env, napi_value object) {
     return napi_ok;
 }

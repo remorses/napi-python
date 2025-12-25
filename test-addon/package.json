@@ -1,0 +1,20 @@
+{
+  "name": "test-addon",
+  "version": "1.0.0",
+  "description": "Test addon for napi-python",
+  "main": "index.js",
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform"
+  },
+  "napi": {
+    "name": "test-addon",
+    "triples": {}
+  },
+  "keywords": [],
+  "author": "remorses",
+  "license": "ISC",
+  "devDependencies": {
+    "@napi-rs/cli": "^3.5.0"
+  }
+}

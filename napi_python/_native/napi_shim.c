@@ -143,6 +143,8 @@ typedef struct {
     napi_status (*create_reference)(napi_env env, napi_value value, uint32_t initial_refcount, napi_ref* result);
     napi_status (*delete_reference)(napi_env env, napi_ref ref);
     napi_status (*get_reference_value)(napi_env env, napi_ref ref, napi_value* result);
+    napi_status (*reference_ref)(napi_env env, napi_ref ref, uint32_t* result);
+    napi_status (*reference_unref)(napi_env env, napi_ref ref, uint32_t* result);
     napi_status (*throw_)(napi_env env, napi_value error);
     napi_status (*throw_error)(napi_env env, const char* code, const char* msg);
     napi_status (*create_error)(napi_env env, napi_value code, napi_value msg, napi_value* result);
@@ -160,6 +162,7 @@ typedef struct {
     // Threadsafe function
     napi_status (*create_tsfn)(napi_env env, napi_value func, napi_value async_resource, napi_value async_resource_name, size_t max_queue_size, size_t initial_thread_count, void* thread_finalize_data, napi_finalize thread_finalize_cb, void* context, void* call_js_cb, void** result);
     napi_status (*call_tsfn)(void* func, void* data, int is_blocking);
+    napi_status (*acquire_tsfn)(void* func);
     napi_status (*release_tsfn)(void* func, int mode);
     // Class/wrap functions
     napi_status (*wrap)(napi_env env, napi_value js_object, void* native_object, napi_finalize finalize_cb, void* finalize_hint, napi_ref* result);
@@ -439,6 +442,18 @@ napi_status napi_get_reference_value(napi_env env, napi_ref ref, napi_value* res
     return napi_generic_failure;
 }
 
+napi_status napi_reference_ref(napi_env env, napi_ref ref, uint32_t* result) {
+    CHECK_FUNCS();
+    if (g_funcs->reference_ref) return g_funcs->reference_ref(env, ref, result);
+    return napi_generic_failure;
+}
+
+napi_status napi_reference_unref(napi_env env, napi_ref ref, uint32_t* result) {
+    CHECK_FUNCS();
+    if (g_funcs->reference_unref) return g_funcs->reference_unref(env, ref, result);
+    return napi_generic_failure;
+}
+
 napi_status napi_throw(napi_env env, napi_value error) {
     CHECK_FUNCS();
     if (g_funcs->throw_) return g_funcs->throw_(env, error);
@@ -582,16 +597,6 @@ napi_status napi_remove_wrap(napi_env env, napi_value js_object, void** result) 
     return napi_ok;
 }
 
-napi_status napi_reference_ref(napi_env env, napi_ref ref, uint32_t* result) {
-    if (result) *result = 1;
-    return napi_ok;
-}
-
-napi_status napi_reference_unref(napi_env env, napi_ref ref, uint32_t* result) {
-    if (result) *result = 0;
-    return napi_ok;
-}
-
 typedef struct napi_threadsafe_function__* napi_threadsafe_function;
 
 napi_status napi_create_threadsafe_function(
@@ -626,6 +631,10 @@ napi_status napi_ref_threadsafe_function(napi_env env, napi_threadsafe_function 
 }
 
 napi_status napi_acquire_threadsafe_function(napi_threadsafe_function func) {
+    CHECK_FUNCS();
+    if (g_funcs->acquire_tsfn) {
+        return g_funcs->acquire_tsfn((void*)func);
+    }
     return napi_ok;
 }
 

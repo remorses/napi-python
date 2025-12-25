@@ -1,0 +1,27 @@
+# napi-python
+
+Load Node-API (.node) native addons in Python.
+
+## Goal
+
+Run native addons built with napi-rs, node-addon-api, or raw N-API directly in Python without Node.js.
+
+## How it works
+
+1. A C shim library exports all NAPI symbols
+2. Python implements the NAPI functions via ctypes
+3. When a .node file loads, it resolves symbols from our shim
+4. Native callbacks get wrapped as Python callables
+
+## Usage
+
+```python
+from napi_python import load_addon
+
+addon = load_addon("path/to/addon.node")
+result = addon.add(1, 2)
+```
+
+## Status
+
+Early development. Basic functions work, classes and async are WIP.

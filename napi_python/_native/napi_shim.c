@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdio.h>
 
 // NAPI types
 typedef struct napi_env__* napi_env;
@@ -201,6 +202,9 @@ typedef struct {
     napi_status (*get_all_property_names)(napi_env env, napi_value object, int key_mode, int key_filter, int key_conversion, napi_value* result);
     // Get property names
     napi_status (*get_property_names)(napi_env env, napi_value object, napi_value* result);
+    // Instance data
+    napi_status (*set_instance_data)(napi_env env, void* data, napi_finalize finalize_cb, void* finalize_hint);
+    napi_status (*get_instance_data)(napi_env env, void** result);
 } NapiPythonFunctions;
 
 // Global function table
@@ -688,10 +692,14 @@ napi_status napi_define_properties(napi_env env, napi_value object, size_t prope
 }
 
 napi_status napi_set_instance_data(napi_env env, void* data, napi_finalize finalize_cb, void* finalize_hint) {
+    CHECK_FUNCS();
+    if (g_funcs->set_instance_data) return g_funcs->set_instance_data(env, data, finalize_cb, finalize_hint);
     return napi_ok;
 }
 
 napi_status napi_get_instance_data(napi_env env, void** data) {
+    CHECK_FUNCS();
+    if (g_funcs->get_instance_data) return g_funcs->get_instance_data(env, data);
     if (data) *data = NULL;
     return napi_ok;
 }

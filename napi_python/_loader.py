@@ -250,6 +250,22 @@ FuncThrowTypeError = CFUNCTYPE(c_int, c_void_p, c_char_p, c_char_p)
 FuncThrowRangeError = CFUNCTYPE(c_int, c_void_p, c_char_p, c_char_p)
 FuncCreateTypeError = CFUNCTYPE(c_int, c_void_p, c_void_p, c_void_p, POINTER(c_void_p))
 FuncCreateRangeError = CFUNCTYPE(c_int, c_void_p, c_void_p, c_void_p, POINTER(c_void_p))
+# Instance creation
+FuncNewInstance = CFUNCTYPE(
+    c_int, c_void_p, c_void_p, c_size_t, POINTER(c_void_p), POINTER(c_void_p)
+)
+# Fatal exception
+FuncFatalException = CFUNCTYPE(c_int, c_void_p, c_void_p)
+# Get new target
+FuncGetNewTarget = CFUNCTYPE(c_int, c_void_p, c_void_p, POINTER(c_void_p))
+# Property checking
+FuncHasOwnProperty = CFUNCTYPE(c_int, c_void_p, c_void_p, c_void_p, POINTER(c_bool))
+# Get all property names
+FuncGetAllPropertyNames = CFUNCTYPE(
+    c_int, c_void_p, c_void_p, c_int, c_int, c_int, POINTER(c_void_p)
+)
+# Get property names
+FuncGetPropertyNames = CFUNCTYPE(c_int, c_void_p, c_void_p, POINTER(c_void_p))
 
 
 # Property descriptor structure (matches C struct)
@@ -353,6 +369,18 @@ class NapiPythonFunctions(Structure):
         ("throw_range_error", FuncThrowRangeError),
         ("create_type_error", FuncCreateTypeError),
         ("create_range_error", FuncCreateRangeError),
+        # Instance creation
+        ("new_instance", FuncNewInstance),
+        # Fatal exception
+        ("fatal_exception", FuncFatalException),
+        # Get new target
+        ("get_new_target", FuncGetNewTarget),
+        # Property checking
+        ("has_own_property", FuncHasOwnProperty),
+        # Get all property names
+        ("get_all_property_names", FuncGetAllPropertyNames),
+        # Get property names
+        ("get_property_names", FuncGetPropertyNames),
     ]
 
 
@@ -414,11 +442,13 @@ def _create_function_table() -> NapiPythonFunctions:
 
     @FuncGetUndefined
     def get_undefined(env, result):
+        print(f"[napi-python] get_undefined: env={env}")
         result[0] = Constant.UNDEFINED
         return napi_status.napi_ok
 
     @FuncGetNull
     def get_null(env, result):
+        print(f"[napi-python] get_null: env={env}")
         result[0] = Constant.NULL
         return napi_status.napi_ok
 
@@ -529,7 +559,9 @@ def _create_function_table() -> NapiPythonFunctions:
     def typeof_(env, value, result):
         from ._runtime.handle import Undefined
 
+        print(f"[napi-python] typeof: value={value}")
         py_val = ctx.python_value_from_napi(value)
+        print(f"[napi-python] typeof: py_val={py_val}, type={type(py_val)}")
         if py_val is Undefined:
             result[0] = napi_valuetype.napi_undefined
         elif py_val is None:
@@ -629,9 +661,13 @@ def _create_function_table() -> NapiPythonFunctions:
     def get_named_property(env, obj, name, result):
         py_obj = ctx.python_value_from_napi(obj)
         key = name.decode("utf-8") if name else ""
+        print(f"[napi-python] get_named_property: obj={obj}, key={key}")
         if isinstance(py_obj, dict):
-            result[0] = ctx.add_value(py_obj.get(key))
+            val = py_obj.get(key)
+            print(f"[napi-python] get_named_property: dict[{key}] = {val}")
+            result[0] = ctx.add_value(val)
         else:
+            print(f"[napi-python] get_named_property: not a dict, returning undefined")
             result[0] = Constant.UNDEFINED
         return napi_status.napi_ok
 
@@ -728,14 +764,17 @@ def _create_function_table() -> NapiPythonFunctions:
     @FuncCallFunction
     def call_function(env_id, recv, func, argc, argv, result):
         """Call a JavaScript function."""
+        print(f"[napi-python] call_function: env={env_id}, recv={recv}, func={func}, argc={argc}")
         env_obj = get_env(env_id)
         if not env_obj:
+            print(f"[napi-python] call_function: env not found")
             if result:
                 result[0] = Constant.UNDEFINED
             return napi_status.napi_invalid_arg
 
         # Get the function
         py_func = ctx.python_value_from_napi(func)
+        print(f"[napi-python] call_function: py_func={py_func}, callable={callable(py_func)}")
         if not callable(py_func):
             if result:
                 result[0] = Constant.UNDEFINED
@@ -748,14 +787,20 @@ def _create_function_table() -> NapiPythonFunctions:
         args = []
         for i in range(argc):
             arg_handle = argv[i] if argv else Constant.UNDEFINED
+            print(f"[napi-python] call_function: arg[{i}] handle={arg_handle}")
             args.append(ctx.python_value_from_napi(arg_handle))
+        print(f"[napi-python] call_function: args={args}")
 
         # Call the function
         try:
             ret = py_func(*args)
+            print(f"[napi-python] call_function: ret={ret}")
             if result:
                 result[0] = ctx.add_value(ret)
         except Exception as e:
+            print(f"[napi-python] call_function: exception={e}")
+            import traceback
+            traceback.print_exc()
             env_obj.last_exception = e
             if result:
                 result[0] = Constant.UNDEFINED
@@ -785,17 +830,31 @@ def _create_function_table() -> NapiPythonFunctions:
         _wrap_counter[0] += 1
         py_value = ctx.python_value_from_napi(value)
         _wrap_store[ref_id] = {"value": py_value, "refcount": initial_refcount}
+        print(f"[napi-python] create_reference: ref_id={ref_id}, value={py_value}, refcount={initial_refcount}")
         if result:
             result[0] = ref_id
         return napi_status.napi_ok
 
     @FuncDeleteReference
     def delete_reference(env, ref):
+        # Remove from store if exists
+        _wrap_store.pop(ref, None)
         return napi_status.napi_ok
 
     @FuncGetReferenceValue
     def get_reference_value(env, ref, result):
-        result[0] = Constant.UNDEFINED
+        """Get the value from a reference."""
+        ref_data = _wrap_store.get(ref)
+        print(f"[napi-python] get_reference_value: ref={ref}, found={ref_data is not None}")
+        if ref_data and "value" in ref_data:
+            py_value = ref_data["value"]
+            print(f"[napi-python] get_reference_value: value={py_value}")
+            if result:
+                result[0] = ctx.add_value(py_value)
+            return napi_status.napi_ok
+        # Reference not found or empty
+        if result:
+            result[0] = Constant.UNDEFINED
         return napi_status.napi_ok
 
     @FuncThrow
@@ -813,12 +872,26 @@ def _create_function_table() -> NapiPythonFunctions:
 
     @FuncIsExceptionPending
     def is_exception_pending(env, result):
-        result[0] = False
+        print(f"[napi-python] is_exception_pending: env={env}")
+        env_obj = get_env(env)
+        if env_obj and env_obj.last_exception is not None:
+            print(f"[napi-python] is_exception_pending: YES, {env_obj.last_exception}")
+            result[0] = True
+        else:
+            result[0] = False
         return napi_status.napi_ok
 
     @FuncGetAndClearLastException
     def get_and_clear_last_exception(env, result):
-        result[0] = Constant.UNDEFINED
+        print(f"[napi-python] get_and_clear_last_exception: env={env}")
+        env_obj = get_env(env)
+        if env_obj and env_obj.last_exception is not None:
+            print(f"[napi-python] get_and_clear_last_exception: {env_obj.last_exception}")
+            exc = env_obj.last_exception
+            env_obj.last_exception = None
+            result[0] = ctx.add_value(exc)
+        else:
+            result[0] = Constant.UNDEFINED
         return napi_status.napi_ok
 
     @FuncOpenHandleScope
@@ -914,11 +987,27 @@ def _create_function_table() -> NapiPythonFunctions:
         """Associate a native pointer with a JavaScript object."""
         env_obj = get_env(env_id)
         if not env_obj:
-            return napi_status.napi_invalid_arg
+            if result:
+                result[0] = 0
+            return napi_status.napi_ok  # Be lenient
 
-        py_obj = ctx.python_value_from_napi(js_object)
+        # Handle None/0 handles gracefully
+        if js_object is None or js_object == 0:
+            if result:
+                result[0] = 0
+            return napi_status.napi_ok
+
+        try:
+            py_obj = ctx.python_value_from_napi(js_object)
+        except Exception:
+            if result:
+                result[0] = 0
+            return napi_status.napi_ok
+
         if py_obj is None:
-            return napi_status.napi_invalid_arg
+            if result:
+                result[0] = 0
+            return napi_status.napi_ok  # Be lenient
 
         # Store the native pointer on the object
         try:
@@ -945,11 +1034,14 @@ def _create_function_table() -> NapiPythonFunctions:
     @FuncUnwrap
     def unwrap(env_id, js_object, result):
         """Get the native pointer from a JavaScript object."""
+        print(f"[napi-python] unwrap: env={env_id}, js_object={js_object}")
         env_obj = get_env(env_id)
         if not env_obj:
+            print(f"[napi-python] unwrap: env not found")
             return napi_status.napi_invalid_arg
 
         py_obj = ctx.python_value_from_napi(js_object)
+        print(f"[napi-python] unwrap: py_obj={py_obj}")
         if py_obj is None:
             return napi_status.napi_invalid_arg
 
@@ -1308,10 +1400,28 @@ def _create_function_table() -> NapiPythonFunctions:
         else:
             js_cb = None
 
+        # Store the function as a persistent reference to prevent it from
+        # being overwritten when scopes are closed
+        func_ref = None
+        func_value = None
+        if func is not None and func != 0:
+            try:
+                func_value = ctx.python_value_from_napi(func)
+                if func_value is not None:
+                    # Create a reference to preserve the function
+                    func_ref = _wrap_counter[0]
+                    _wrap_counter[0] += 1
+                    _wrap_store[func_ref] = {"value": func_value, "refcount": 1}
+                    print(f"[napi-python] create_tsfn: stored func as ref {func_ref} -> {func_value}")
+            except Exception as e:
+                print(f"[napi-python] create_tsfn: failed to store func: {e}")
+
         tsfn_data = {
             "id": tsfn_id,
             "env_id": env_id,
             "func": func,
+            "func_ref": func_ref,  # Persistent reference to the function
+            "func_value": func_value,  # Direct reference to prevent GC
             "context": context,
             "call_js_cb": js_cb,
             "loop": loop,
@@ -1322,6 +1432,9 @@ def _create_function_table() -> NapiPythonFunctions:
             "finalize_cb": thread_finalize_cb,
         }
 
+        print(
+            f"[napi-python] create_tsfn: id={tsfn_id}, func={func}, func_ref={func_ref}, call_js_cb={js_cb}"
+        )
         _tsfn_store[tsfn_id] = tsfn_data
         _callback_refs.append(tsfn_data)
         if js_cb:
@@ -1336,9 +1449,13 @@ def _create_function_table() -> NapiPythonFunctions:
     def call_tsfn(tsfn_id, data, is_blocking):
         """Call a threadsafe function."""
         import asyncio
+        import threading
+
+        print(f"[napi-python] call_tsfn: id={tsfn_id}, data={data}, blocking={is_blocking}")
 
         tsfn_data = _tsfn_store.get(tsfn_id)
         if not tsfn_data or tsfn_data["closed"]:
+            print(f"[napi-python] call_tsfn: TSFN {tsfn_id} not found or closed")
             return napi_status.napi_closing
 
         env_id = tsfn_data["env_id"]
@@ -1351,24 +1468,59 @@ def _create_function_table() -> NapiPythonFunctions:
             """Execute the callback on the main thread."""
             env_obj = get_env(env_id)
             if not env_obj:
+                print(f"[napi-python] TSFN dispatch: env not found")
                 return
 
             # Open a scope for this callback
             scope = ctx.open_scope(env_obj)
             try:
                 if call_js_cb:
+                    # Get the function from our persistent reference
+                    # tsfn_data is captured from the enclosing scope
+                    func_value = tsfn_data.get("func_value")
+                    
+                    if func_value is not None:
+                        # Create a fresh handle for this callback invocation
+                        js_callback = ctx.add_value(func_value)
+                        print(f"[napi-python] TSFN dispatch: func_value={func_value}, js_callback={js_callback}")
+                    else:
+                        js_callback = 0
+                        print(f"[napi-python] TSFN dispatch: no func_value, js_callback=0")
+                    
                     # Call the JS callback: (env, js_callback, context, data)
-                    call_js_cb(env_id, func, context, data)
+                    call_js_cb(env_id, js_callback, context, data)
+                    print(f"[napi-python] TSFN dispatch: call_js_cb returned")
             except Exception as e:
                 print(f"[napi-python] TSFN callback error: {e}")
+                import traceback
+
+                traceback.print_exc()
             finally:
                 ctx.close_scope(env_obj, scope)
 
-        # Dispatch to the event loop
-        try:
-            loop.call_soon_threadsafe(dispatch)
-        except RuntimeError:
-            # Loop might be closed, try to run synchronously
+        # Check if we're on the main thread
+        main_thread_id = getattr(ctx, "_main_thread_id", None)
+        current_thread_id = threading.current_thread().ident
+
+        if main_thread_id is None:
+            # First call - assume this is the main thread
+            ctx._main_thread_id = current_thread_id
+            main_thread_id = current_thread_id
+
+        if is_blocking == 1:
+            # Blocking mode - always dispatch immediately
+            dispatch()
+        elif current_thread_id == main_thread_id:
+            # We're on the main thread - dispatch immediately
+            dispatch()
+        else:
+            # We're on a background thread with non-blocking mode
+            # For webcodecs and similar libs, we still need to dispatch 
+            # immediately because the asyncio event loop won't process
+            # queued callbacks until awaited
+            # 
+            # TODO: Consider using a proper queue and async processing
+            # For now, dispatch directly (native code handles thread safety)
             dispatch()
 
         return napi_status.napi_ok
@@ -1614,12 +1766,15 @@ def _create_function_table() -> NapiPythonFunctions:
 
     @FuncCreateExternal
     def create_external(env, data_ptr, finalize_cb, finalize_hint, result):
+        print(f"[napi-python] create_external: env={env}, data_ptr={data_ptr}")
         try:
             external = ctx.create_external(data_ptr)
             handle = ctx.add_value(external)
             result[0] = handle
+            print(f"[napi-python] create_external: created handle {handle}")
             return napi_status.napi_ok
-        except Exception:
+        except Exception as e:
+            print(f"[napi-python] create_external: failed: {e}")
             return napi_status.napi_generic_failure
 
     @FuncGetValueExternal
@@ -1678,6 +1833,143 @@ def _create_function_table() -> NapiPythonFunctions:
             return napi_status.napi_ok
         except Exception:
             return napi_status.napi_generic_failure
+
+    # =============================================================================
+    # Instance Creation
+    # =============================================================================
+
+    @FuncNewInstance
+    def new_instance(env_id, constructor_handle, argc, argv, result):
+        """Create a new instance of a class."""
+        print(f"[napi-python] new_instance: env={env_id}, constructor={constructor_handle}, argc={argc}")
+        env_obj = get_env(env_id)
+        if not env_obj:
+            print(f"[napi-python] new_instance: env not found")
+            return napi_status.napi_invalid_arg
+
+        try:
+            # Get the constructor class
+            constructor = ctx.python_value_from_napi(constructor_handle)
+            print(f"[napi-python] new_instance: constructor -> {constructor}")
+            if constructor is None:
+                if result:
+                    result[0] = Constant.UNDEFINED
+                return napi_status.napi_invalid_arg
+
+            # Get arguments
+            args = []
+            for i in range(argc):
+                if argv:
+                    arg_handle = argv[i]
+                    args.append(ctx.python_value_from_napi(arg_handle))
+                else:
+                    args.append(None)
+
+            # Create the instance by calling the constructor
+            if callable(constructor):
+                instance = constructor(*args)
+            else:
+                # If not callable, return undefined
+                if result:
+                    result[0] = Constant.UNDEFINED
+                return napi_status.napi_function_expected
+
+            # Store the instance and return handle
+            if result:
+                result[0] = ctx.add_value(instance)
+            return napi_status.napi_ok
+
+        except Exception as e:
+            print(f"[napi-python] new_instance error: {e}")
+            if result:
+                result[0] = Constant.UNDEFINED
+            return napi_status.napi_generic_failure
+
+    @FuncFatalException
+    def fatal_exception(env_id, err):
+        """Handle a fatal exception - just log it for now."""
+        try:
+            py_err = ctx.python_value_from_napi(err)
+            print(f"[napi-python] Fatal exception: err={err} -> {py_err}")
+            # Try to get more info if it's an error object
+            if isinstance(py_err, dict) and "message" in py_err:
+                print(f"[napi-python] Fatal exception message: {py_err['message']}")
+            import traceback
+            traceback.print_stack()
+        except Exception as e:
+            print(f"[napi-python] Fatal exception: err={err}, lookup failed: {e}")
+        return napi_status.napi_ok
+
+    @FuncGetNewTarget
+    def get_new_target(env_id, cbinfo, result):
+        """Get the new.target value from callback info."""
+        try:
+            cb_info = ctx.get_callback_info(cbinfo)
+            new_target = getattr(cb_info, "new_target", None)
+            if result:
+                if new_target is not None:
+                    result[0] = ctx.add_value(new_target)
+                else:
+                    result[0] = Constant.UNDEFINED
+            return napi_status.napi_ok
+        except Exception:
+            if result:
+                result[0] = Constant.UNDEFINED
+            return napi_status.napi_ok
+
+    @FuncHasOwnProperty
+    def has_own_property(env_id, object_handle, key_handle, result):
+        """Check if object has own property."""
+        try:
+            py_obj = ctx.python_value_from_napi(object_handle)
+            py_key = ctx.python_value_from_napi(key_handle)
+            if isinstance(py_obj, dict):
+                if result:
+                    result[0] = py_key in py_obj
+            else:
+                if result:
+                    result[0] = hasattr(py_obj, str(py_key))
+            return napi_status.napi_ok
+        except Exception:
+            if result:
+                result[0] = False
+            return napi_status.napi_ok
+
+    @FuncGetAllPropertyNames
+    def get_all_property_names(
+        env_id, object_handle, key_mode, key_filter, key_conversion, result
+    ):
+        """Get all property names of an object."""
+        try:
+            py_obj = ctx.python_value_from_napi(object_handle)
+            if isinstance(py_obj, dict):
+                names = list(py_obj.keys())
+            else:
+                names = dir(py_obj)
+            if result:
+                result[0] = ctx.add_value(names)
+            return napi_status.napi_ok
+        except Exception:
+            if result:
+                result[0] = ctx.add_value([])
+            return napi_status.napi_ok
+
+    @FuncGetPropertyNames
+    def get_property_names(env_id, object_handle, result):
+        """Get property names of an object."""
+        try:
+            py_obj = ctx.python_value_from_napi(object_handle)
+            if isinstance(py_obj, dict):
+                names = list(py_obj.keys())
+            else:
+                names = [n for n in dir(py_obj) if not n.startswith("_")]
+            if result:
+                result[0] = ctx.add_value(names)
+            return napi_status.napi_ok
+        except Exception:
+            if result:
+                result[0] = ctx.add_value([])
+            return napi_status.napi_ok
 
     # Keep references to prevent GC
     _callback_refs.extend(
@@ -1756,6 +2048,12 @@ def _create_function_table() -> NapiPythonFunctions:
             throw_range_error,
             create_type_error,
             create_range_error,
+            new_instance,
+            fatal_exception,
+            get_new_target,
+            has_own_property,
+            get_all_property_names,
+            get_property_names,
         ]
     )
 
@@ -1834,6 +2132,12 @@ def _create_function_table() -> NapiPythonFunctions:
         throw_range_error=throw_range_error,
         create_type_error=create_type_error,
         create_range_error=create_range_error,
+        new_instance=new_instance,
+        fatal_exception=fatal_exception,
+        get_new_target=get_new_target,
+        has_own_property=has_own_property,
+        get_all_property_names=get_all_property_names,
+        get_property_names=get_property_names,
     )
 
 

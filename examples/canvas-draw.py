@@ -5,10 +5,8 @@ Load and use the canvas npm package native addon with napi-python.
 This demonstrates:
 1. Loading the node-canvas native addon
 2. Creating a Canvas object
-3. Exporting canvas content as PNG
-
-Note: Drawing operations (via CanvasRenderingContext2d) require additional
-work in napi-python to properly handle the native context binding.
+3. Drawing shapes, text, and paths using CanvasRenderingContext2d
+4. Exporting canvas content as PNG
 """
 
 import sys
@@ -47,14 +45,51 @@ def main():
     print(f"  FreeType: {canvas_bindings.freetypeVersion}")
 
     # Create a canvas
-    width, height = 400, 300
+    width, height = 400, 200
     canvas = canvas_bindings.Canvas(width, height)
     print(f"\nCreated canvas: {int(canvas.width)}x{int(canvas.height)}")
     print(f"Canvas type: {canvas.type}")
     print(f"Canvas stride: {int(canvas.stride)} bytes")
 
+    # Create 2D rendering context
+    ctx = canvas_bindings.CanvasRenderingContext2d(canvas)
+    print("\nDrawing on canvas...")
+
+    # Draw background
+    ctx.fillStyle = "#1a1a2e"
+    ctx.fillRect(0, 0, width, height)
+
+    # Draw colored rectangles
+    ctx.fillStyle = "#ff6b6b"  # Red
+    ctx.fillRect(20, 20, 80, 80)
+
+    ctx.fillStyle = "#4ecdc4"  # Teal
+    ctx.fillRect(120, 20, 80, 80)
+
+    ctx.fillStyle = "#ffe66d"  # Yellow
+    ctx.fillRect(220, 20, 80, 80)
+
+    # Draw text
+    ctx.fillStyle = "#ffffff"
+    ctx.font = "24px sans-serif"
+    ctx.fillText("Hello from Python!", 20, 140)
+
+    ctx.fillStyle = "#888888"
+    ctx.font = "14px monospace"
+    ctx.fillText("napi-python + node-canvas", 20, 170)
+
+    # Draw a circle using arc
+    ctx.beginPath()
+    ctx.arc(340, 60, 40, 0, 6.28318)  # 2*PI
+    ctx.fillStyle = "#a855f7"  # Purple
+    ctx.fill()
+
+    print("  - Background filled")
+    print("  - 3 colored rectangles drawn")
+    print("  - Text rendered with 2 fonts")
+    print("  - Circle drawn using arc path")
+
     # Export to PNG buffer
-    # Note: toBuffer() without arguments returns PNG format
     print("\nExporting to PNG...")
     buffer = canvas.toBuffer()
 
@@ -71,18 +106,6 @@ def main():
 
     print(f"\nImage saved to: {OUTPUT_FILE}")
     print(f"File size: {len(png_data)} bytes")
-
-    # Show what we could do with more NAPI support
-    print("\n--- Canvas API available (methods on Canvas) ---")
-    canvas_methods = [m for m in dir(canvas) if not m.startswith("_")]
-    print(f"  {', '.join(canvas_methods)}")
-
-    # Create context to show it's available
-    ctx = canvas_bindings.CanvasRenderingContext2d(canvas)
-    ctx_methods = [m for m in dir(ctx) if not m.startswith("_")][:15]
-    print(f"\n--- CanvasRenderingContext2d methods (sample) ---")
-    print(f"  {', '.join(ctx_methods)}")
-    print("  ... and more")
 
 
 if __name__ == "__main__":
